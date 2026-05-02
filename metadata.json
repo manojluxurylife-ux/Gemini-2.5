@@ -1,0 +1,6 @@
+{
+  "name": "Nexus Justice",
+  "description": "An advanced AI-powered legal assistant and management portal, featuring real-time voice consultation and administrative dashboards.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["AI Advocacy", "Legal Dashboard", "Voice Assistant"]
+}
