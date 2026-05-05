@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
-import { float32ToInt16PCM, int16PCMToFloat32, SAMPLE_RATE, createAudioContext } from '../lib/audio-utils';
+import { float32ToInt16PCM, int16PCMToFloat32, SAMPLE_RATE, OUTPUT_SAMPLE_RATE, createAudioContext } from '../lib/audio-utils';
 
 export interface Message {
   role: 'user' | 'model';
@@ -25,11 +25,10 @@ export function useGeminiLive() {
   const nextStartTimeRef = useRef(0);
 
   const playQueuedAudio = useCallback(() => {
-    if (!audioContextRef.current || audioQueueRef.current.length === 0 || isPlayingRef.current) return;
+    if (!audioContextRef.current || audioQueueRef.current.length === 0) return;
 
-    isPlayingRef.current = true;
     const chunk = audioQueueRef.current.shift()!;
-    const buffer = audioContextRef.current.createBuffer(1, chunk.length, audioContextRef.current.sampleRate);
+    const buffer = audioContextRef.current.createBuffer(1, chunk.length, OUTPUT_SAMPLE_RATE);
     buffer.getChannelData(0).set(chunk);
 
     const source = audioContextRef.current.createBufferSource();
@@ -40,12 +39,15 @@ export function useGeminiLive() {
     source.start(startTime);
     nextStartTimeRef.current = startTime + buffer.duration;
 
+    setIsModelSpeaking(true);
+
     source.onended = () => {
-      isPlayingRef.current = false;
       if (audioQueueRef.current.length > 0) {
         playQueuedAudio();
       } else {
-        setIsModelSpeaking(false);
+        if (audioContextRef.current && audioContextRef.current.currentTime >= nextStartTimeRef.current - 0.1) {
+          setIsModelSpeaking(false);
+        }
       }
     };
   }, []);
@@ -85,9 +87,7 @@ export function useGeminiLive() {
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
       
-      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({
-        sampleRate: SAMPLE_RATE,
-      });
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
       
       const session = await ai.live.connect({
         model: "gemini-3.1-flash-live-preview",
@@ -108,14 +108,18 @@ export function useGeminiLive() {
             console.log("Gemini Live connection established");
           },
           onmessage: async (message: LiveServerMessage) => {
-            console.log("Gemini Live message received:", message);
             if (message.serverContent?.modelTurn) {
               const parts = message.serverContent.modelTurn.parts;
               for (const part of parts) {
                 if (part.inlineData?.data) {
                   const audioData = int16PCMToFloat32(part.inlineData.data);
                   audioQueueRef.current.push(audioData);
-                  setIsModelSpeaking(true);
+                  
+                  // Reset nextStartTime if it's too far in the past
+                  if (audioContextRef.current && nextStartTimeRef.current < audioContextRef.current.currentTime) {
+                    nextStartTimeRef.current = audioContextRef.current.currentTime;
+                  }
+                  
                   playQueuedAudio();
                 }
                 if (part.text) {
@@ -126,9 +130,8 @@ export function useGeminiLive() {
 
             if (message.serverContent?.interrupted) {
               audioQueueRef.current = [];
-              isPlayingRef.current = false;
-              setIsModelSpeaking(false);
               nextStartTimeRef.current = 0;
+              setIsModelSpeaking(false);
             }
           },
           onclose: () => {
@@ -150,7 +153,13 @@ export function useGeminiLive() {
       sessionRef.current = session;
 
       // Start microphone
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        } 
+      });
       streamRef.current = stream;
 
       const source = audioContextRef.current.createMediaStreamSource(stream);
@@ -171,7 +180,10 @@ export function useGeminiLive() {
         if (isConnectedRef.current && sessionRef.current) {
           const pcmData = float32ToInt16PCM(inputData);
           sessionRef.current.sendRealtimeInput({
-            audio: { data: pcmData, mimeType: `audio/pcm;rate=${SAMPLE_RATE}` }
+            audio: { 
+              data: pcmData, 
+              mimeType: `audio/pcm;rate=${audioContextRef.current?.sampleRate || 16000}` 
+            }
           });
         }
       };
@@ -187,10 +199,12 @@ export function useGeminiLive() {
 
   const sendVideoFrame = useCallback((base64Data: string) => {
     if (isConnectedRef.current && sessionRef.current) {
-      sessionRef.current.sendRealtimeInput([{
-        mimeType: 'image/jpeg',
-        data: base64Data
-      }]);
+      sessionRef.current.sendRealtimeInput({
+        video: {
+          mimeType: 'image/jpeg',
+          data: base64Data
+        }
+      });
     }
   }, []);
 
