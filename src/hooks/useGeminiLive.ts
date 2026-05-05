@@ -83,17 +83,14 @@ export function useGeminiLive() {
     setIsConnecting(true);
 
     try {
-      const ai = new GoogleGenAI({ 
-        apiKey: process.env.GEMINI_API_KEY!,
-        apiVersion: "v1beta"
-      });
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
       
       audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({
         sampleRate: SAMPLE_RATE,
       });
       
       const session = await ai.live.connect({
-        model: "gemini-2.5-flash-live-preview",
+        model: "gemini-3.1-flash-live-preview",
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: {
@@ -188,6 +185,15 @@ export function useGeminiLive() {
     }
   }, [isConnected, isConnecting, playQueuedAudio]);
 
+  const sendVideoFrame = useCallback((base64Data: string) => {
+    if (isConnectedRef.current && sessionRef.current) {
+      sessionRef.current.sendRealtimeInput([{
+        mimeType: 'image/jpeg',
+        data: base64Data
+      }]);
+    }
+  }, []);
+
   return {
     isConnected,
     isConnecting,
@@ -195,6 +201,7 @@ export function useGeminiLive() {
     isModelSpeaking,
     volume,
     connect,
-    disconnect
+    disconnect,
+    sendVideoFrame
   };
 }

@@ -200,6 +200,7 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
   
   const [scanPhase, setScanPhase] = useState<'idle' | 'starting' | 'live' | 'processing' | 'done' | 'error'>('idle');
   const [scannedText, setScannedText] = useState('');
+  const [liveCameraActive, setLiveCameraActive] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -284,6 +285,13 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
     setConverterImage(imageBase64);
     setConverterText('');
     setConverterStatus('idle');
+    
+    // Stop camera tracks
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+    setScanPhase('idle');
   };
 
   const handleTranslate = async () => {
@@ -423,7 +431,7 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
 
     try {
       console.log("Sending smooth request to AI Engine:", text, task);
-      const placeholder: AIMessage = { role: 'assistant', content: '', model: "Gemini 2.5 Flash" };
+      const placeholder: AIMessage = { role: 'assistant', content: '', model: "Gemini 3.1 Flash" };
       setChatHistory([...historyWithUser, placeholder]);
 
       let fullText = "";
@@ -441,7 +449,7 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
       }
       
       // Final sync
-      setVoiceHistory(prev => [...prev.slice(-9), { role: 'assistant', content: fullText, model: "Gemini 2.5 Flash" }]);
+      setVoiceHistory(prev => [...prev.slice(-9), { role: 'assistant', content: fullText, model: "Gemini 3.1 Flash" }]);
     } catch (err) { 
       console.error("Consultation Error:", err); 
       setChatHistory(prev => [...prev, { role: 'assistant', content: "Error: Failed to process your request. Please try again.", model: "System" }]);
@@ -563,12 +571,70 @@ ${response.text}`;
 
   const startScan = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      } catch (e) {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      }
       streamRef.current = stream;
       if (videoRef.current) videoRef.current.srcObject = stream;
       setScanPhase('live');
-    } catch (err) { setScanPhase('error'); }
+    } catch (err) { 
+      console.error("Camera access error:", err);
+      setScanPhase('error'); 
+    }
   };
+
+  const toggleLiveCamera = async () => {
+    if (liveCameraActive) {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop());
+        streamRef.current = null;
+      }
+      setLiveCameraActive(false);
+    } else {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        streamRef.current = stream;
+        if (videoRef.current) videoRef.current.srcObject = stream;
+        setLiveCameraActive(true);
+      } catch (err) {
+        console.error("Failed to start live camera:", err);
+      }
+    }
+  };
+
+  // Stream camera frames to Gemini Live if both are active
+  useEffect(() => {
+    let intervalId: any;
+    
+    if (geminiLive.isConnected && liveCameraActive && videoRef.current && canvasRef.current) {
+      const context = canvasRef.current.getContext('2d');
+      
+      intervalId = setInterval(() => {
+        if (!videoRef.current || !canvasRef.current || !context) return;
+        
+        // Match canvas size to video
+        if (canvasRef.current.width !== videoRef.current.videoWidth) {
+          canvasRef.current.width = videoRef.current.videoWidth;
+          canvasRef.current.height = videoRef.current.videoHeight;
+        }
+        
+        context.drawImage(videoRef.current, 0, 0, canvasRef.current.width, canvasRef.current.height);
+        
+        // Convert to base64 jpeg
+        const base64 = canvasRef.current.toDataURL('image/jpeg', 0.5).split(',')[1];
+        if (base64) {
+          geminiLive.sendVideoFrame(base64);
+        }
+      }, 1000);
+    }
+    
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [geminiLive.isConnected, liveCameraActive, geminiLive]);
 
   const captureScan = async () => {
     if (!videoRef.current || !canvasRef.current) return;
@@ -619,7 +685,7 @@ ${response.text}`;
             <h1 className="text-lg font-black tracking-widest uppercase flex items-center gap-2">
               <span className="text-slate-200">NEXUS</span>
               <span className="text-indigo-500">JUSTICE</span>
-              <span className="text-[10px] text-slate-500 font-bold ml-2">GEMINI 2.5 FLASH POWERED</span>
+              <span className="text-[10px] text-slate-500 font-bold ml-2">GEMINI 3.1 FLASH POWERED</span>
             </h1>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -632,7 +698,7 @@ ${response.text}`;
               VOICE: {geminiLive.isConnected ? 'LIVE INTERACTION' : 'STANDBY'}
             </div>
             <div className="bg-indigo-500/10 text-indigo-400 px-4 py-1.5 rounded-full text-[10px] font-black tracking-widest flex items-center gap-2 border border-indigo-500/20">
-              <div className="w-2 h-2 rounded-full bg-indigo-500" /> GEMINI 2.5 FLASH ACTIVE
+              <div className="w-2 h-2 rounded-full bg-indigo-500" /> GEMINI 3.1 FLASH ACTIVE
             </div>
           </div>
         </header>
@@ -668,17 +734,39 @@ ${response.text}`;
                           <div className={`w-2 h-2 rounded-full transition-all ${geminiLive.isConnected ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]' : 'bg-slate-500'}`} />
                         </div>
                         
-                        <div className="flex gap-3 mb-8">
+                        <div className="flex gap-3 mb-4">
                           <button 
                             onClick={() => geminiLive.isConnected ? geminiLive.disconnect() : geminiLive.connect()} 
-                            className={`flex-1 py-4 rounded-xl font-black text-sm transition-all flex items-center justify-center gap-2 ${
+                            className={`flex-[2] py-4 rounded-xl font-black text-sm transition-all flex items-center justify-center gap-2 ${
                               geminiLive.isConnected ? 'bg-red-500 text-white shadow-lg' : 'bg-indigo-600 text-white shadow-[0_4px_15px_rgba(99,102,241,0.3)] hover:bg-indigo-500'
                             }`}
                           >
                             {geminiLive.isConnected ? <Square size={18} /> : <Mic size={18} />}
                             {geminiLive.isConnecting ? 'Initializing...' : geminiLive.isConnected ? 'Stop Interaction' : 'Start Gemini Live Voice'}
                           </button>
+                          
+                          {geminiLive.isConnected && (
+                            <button 
+                              onClick={toggleLiveCamera}
+                              className={`flex-1 py-4 rounded-xl font-black text-sm transition-all flex items-center justify-center gap-2 ${
+                                liveCameraActive ? 'bg-emerald-500 text-white' : 'bg-white/10 text-emerald-400 border border-emerald-500/20'
+                              }`}
+                              title={liveCameraActive ? 'Disable Visual Input' : 'Enable Visual Input'}
+                            >
+                              <Camera size={18} />
+                            </button>
+                          )}
                         </div>
+
+                        {liveCameraActive && (
+                          <div className="mb-4 aspect-video bg-black rounded-xl overflow-hidden border border-emerald-500/30 relative">
+                            <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+                            <div className="absolute top-2 right-2 flex items-center gap-2 px-2 py-1 bg-black/60 rounded-lg border border-emerald-500/30">
+                              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                              <span className="text-[8px] font-black text-emerald-400 uppercase tracking-widest leading-none">LIVE FEED</span>
+                            </div>
+                          </div>
+                        )}
 
                         <div className="flex justify-between items-center mb-2">
                           <span className="text-xs font-bold text-slate-300">Auto-Answer Incoming Calls</span>
@@ -687,7 +775,7 @@ ${response.text}`;
                           </button>
                         </div>
                         <div className="flex justify-between items-center">
-                          <div className="text-[10px] text-slate-500 font-medium italic">Gemini 2.5 Flash Direct Streaming</div>
+                          <div className="text-[10px] text-slate-500 font-medium italic">Gemini 3.1 Flash Direct Streaming</div>
                           <button onClick={simulateIncomingCall} className="text-[10px] font-black text-indigo-400 hover:text-indigo-300 uppercase tracking-widest">Simulate Call</button>
                         </div>
                       </div>
@@ -744,7 +832,7 @@ ${response.text}`;
                         </div>
                       </div>
 
-                      {/* Gemini 2.5 Flash Powered Status */}
+                      {/* Gemini 3.1 Flash Powered Status */}
                       <div className="bg-indigo-500/5 border border-indigo-500/20 rounded-3xl p-6 mb-6">
                         <div className="flex justify-between items-center mb-4">
                           <div className="text-[10px] font-black text-indigo-400 tracking-widest uppercase">System Intelligence</div>
@@ -756,7 +844,7 @@ ${response.text}`;
 
                         <div className="space-y-4">
                           <div className="flex items-center justify-between">
-                            <div className="text-xs font-bold text-slate-200">Gemini 2.5 Flash</div>
+                            <div className="text-xs font-bold text-slate-200">Gemini 3.1 Flash</div>
                             <div className="text-[10px] text-indigo-400 font-bold tracking-widest uppercase">
                               Cloud Unified
                             </div>
@@ -769,7 +857,7 @@ ${response.text}`;
                           </div>
 
                           <button 
-                            onClick={() => speakResponse({ text: "Nexus Justice is ready. How can I facilitate your legal workflow today?", model: "Gemini 2.5 Flash" })}
+                            onClick={() => speakResponse({ text: "Nexus Justice is ready. How can I facilitate your legal workflow today?", model: "Gemini 3.1 Flash" })}
                             className="w-full py-3 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/10 rounded-xl font-black text-[10px] text-indigo-400 hover:text-indigo-300 transition-all uppercase tracking-[0.2em] flex items-center justify-center gap-2"
                           >
                             <Volume2 size={12} />
@@ -1238,10 +1326,28 @@ ${response.text}`;
                     <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
                     <canvas ref={canvasRef} className="hidden" />
                     {scanPhase === 'processing' && (
-                      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center">
-                        <div className="flex flex-col items-center gap-3">
-                          <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-                          <div className="text-xs font-black tracking-widest uppercase text-indigo-400">Analyzing Document</div>
+                      <div className="absolute inset-0 bg-black/80 backdrop-blur-md flex flex-col items-center justify-center z-20">
+                        <button 
+                          onClick={() => {
+                            setScanPhase('idle');
+                            if (streamRef.current) {
+                              streamRef.current.getTracks().forEach(t => t.stop());
+                              streamRef.current = null;
+                            }
+                          }}
+                          className="absolute top-4 right-4 p-2 bg-white/10 hover:bg-white/20 rounded-full text-white transition-all shadow-lg"
+                        >
+                          <X size={20} />
+                        </button>
+                        <div className="flex flex-col items-center gap-4">
+                          <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                          <div className="text-[10px] font-black tracking-[0.3em] uppercase text-indigo-400 animate-pulse">Analyzing Document</div>
+                          <button 
+                            onClick={() => setScanPhase('idle')}
+                            className="mt-4 px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-[10px] font-black text-slate-500 uppercase tracking-widest hover:bg-white/10 transition-all"
+                          >
+                            Cancel Process
+                          </button>
                         </div>
                       </div>
                     )}
@@ -1309,17 +1415,58 @@ ${response.text}`;
                     </div>
                   </div>
 
-                  {converterImage && (
+                  {scanPhase === 'live' ? (
+                    <div className="bg-slate-900/50 border border-indigo-500/30 rounded-3xl p-4 flex flex-col gap-4">
+                      <div className="aspect-[3/4] bg-black rounded-2xl overflow-hidden border border-white/10 relative">
+                        <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+                        <div className="absolute top-2 right-2 flex items-center gap-2 px-2 py-1 bg-black/60 rounded-lg border border-indigo-500/30">
+                          <div className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
+                          <span className="text-[8px] font-black text-indigo-400 uppercase tracking-widest leading-none">SCANNING DOCUMENT</span>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={captureForConverter} 
+                          className="flex-1 py-4 bg-indigo-600 rounded-2xl font-bold flex items-center justify-center gap-2 shadow-[0_4px_15px_rgba(79,70,229,0.3)]"
+                        >
+                          <Camera size={18} /> Snap Document
+                        </button>
+                        <button 
+                          onClick={() => {
+                            if (streamRef.current) {
+                              streamRef.current.getTracks().forEach(t => t.stop());
+                              streamRef.current = null;
+                            }
+                            setScanPhase('idle');
+                          }}
+                          className="p-4 bg-white/5 border border-white/10 rounded-2xl text-slate-400"
+                        >
+                          <X size={20} />
+                        </button>
+                      </div>
+                    </div>
+                  ) : converterImage && (
                     <div className="bg-slate-900/50 border border-white/5 rounded-3xl p-4 flex flex-col gap-4">
-                      <div className="aspect-[3/4] bg-black rounded-2xl overflow-hidden border border-white/10">
+                      <div className="aspect-[3/4] bg-black rounded-2xl overflow-hidden border border-white/10 relative group">
                         <img src={converterImage} alt="Preview" className="w-full h-full object-contain" />
+                        <button 
+                          onClick={() => setConverterImage(null)}
+                          className="absolute top-2 right-2 p-2 bg-black/60 rounded-lg text-white opacity-0 group-hover:opacity-100 transition-all"
+                        >
+                          <Trash2 size={14} />
+                        </button>
                       </div>
                       <button 
                         onClick={processConversion} 
                         disabled={converterStatus === 'processing'} 
-                        className="w-full py-4 bg-indigo-600 rounded-2xl font-bold disabled:opacity-50"
+                        className="w-full py-4 bg-indigo-600 rounded-2xl font-bold disabled:opacity-50 shadow-[0_4px_15px_rgba(79,70,229,0.3)] hover:bg-indigo-500 transition-all"
                       >
-                        {converterStatus === 'processing' ? 'AI Processing...' : 'Extract & Convert'}
+                        {converterStatus === 'processing' ? (
+                          <div className="flex items-center justify-center gap-3">
+                            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                            <span>AI Extraction...</span>
+                          </div>
+                        ) : 'Extract & Convert'}
                       </button>
                     </div>
                   )}
@@ -1366,7 +1513,27 @@ ${response.text}`;
                       </button>
                     </div>
                   </div>
-                  <div className="flex-1 bg-black/40 rounded-3xl p-8 overflow-y-auto font-mono text-sm text-slate-400 leading-relaxed whitespace-pre-wrap border border-white/5">
+                  <div className="flex-1 bg-black/40 rounded-3xl p-8 overflow-y-auto font-mono text-sm text-slate-400 leading-relaxed whitespace-pre-wrap border border-white/5 relative">
+                    {converterStatus === 'processing' && (
+                      <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-md flex flex-col items-center justify-center z-20">
+                        <button 
+                          onClick={() => setConverterStatus('idle')}
+                          className="absolute top-4 right-4 p-2 bg-white/10 hover:bg-white/20 rounded-full text-white"
+                        >
+                          <X size={20} />
+                        </button>
+                        <div className="flex flex-col items-center gap-4">
+                          <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                          <div className="text-[10px] font-black tracking-[0.3em] uppercase text-indigo-400 animate-pulse text-center max-w-[200px]">Nexus AI is analyzing the document...</div>
+                          <button 
+                            onClick={() => setConverterStatus('idle')}
+                            className="mt-4 px-4 py-2 bg-indigo-500/10 border border-indigo-500/30 rounded-lg text-[10px] font-black text-indigo-400 uppercase tracking-widest hover:bg-indigo-500/20"
+                          >
+                            Stop Extraction
+                          </button>
+                        </div>
+                      </div>
+                    )}
                     {converterText || (converterStatus === 'processing' ? "Nexus AI is analyzing the document structure and content..." : "Capture or upload a document to begin the conversion process.")}
                   </div>
                 </div>

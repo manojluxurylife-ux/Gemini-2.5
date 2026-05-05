@@ -42,9 +42,9 @@ export class HybridAIEngine {
   public getStatus() {
     return {
       builtIn: !!this.ai,
-      voiceModel: 'Gemini 2.5 Flash (Direct)',
-      draftModel: 'Gemini 2.5 Flash',
-      searchModel: 'Gemini 2.5 Flash (Search)',
+      voiceModel: 'Gemini 3.1 Flash (Direct)',
+      draftModel: 'Gemini 3.1 Flash',
+      searchModel: 'Gemini 3.1 Flash (Search)',
       isLocalReady: true,
       loadProgress: 100
     };
@@ -61,8 +61,8 @@ export class HybridAIEngine {
     }
 
     try {
-      // Direct use of Gemini 2.0 Flash
-      const modelName = 'gemini-2.0-flash';
+      // Direct use of Gemini 3 Flash
+      const modelName = 'gemini-3-flash-preview';
       const contents: any[] = history.map(m => ({
         role: m.role === 'assistant' ? 'model' : 'user',
         parts: [{ text: m.content }]
@@ -106,10 +106,10 @@ export class HybridAIEngine {
 
       if (effectiveTask === 'search') {
         const text = await this.callGeminiSearch(prompt, history);
-        return { text, model: "Gemini 2.5 Flash (Search)" };
+        return { text, model: "Gemini 3.1 Flash (Search)" };
       }
 
-      const modelName = 'gemini-2.0-flash';
+      const modelName = 'gemini-3-flash-preview';
       const contents: any[] = history.map(m => ({
         role: m.role === 'assistant' ? 'model' : 'user',
         parts: [{ text: m.content }]
@@ -117,12 +117,16 @@ export class HybridAIEngine {
 
       const parts: any[] = [{ text: prompt }];
       if (imageBase64) {
-        parts.push({
-          inlineData: {
-            data: imageBase64.split(',')[1],
-            mimeType: 'image/jpeg'
-          }
-        });
+        const base64Data = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
+        const mimeType = imageBase64.match(/data:([^;]+);base64/)?.[1] || 'image/jpeg';
+        if (base64Data) {
+          parts.push({
+            inlineData: {
+              data: base64Data,
+              mimeType: mimeType
+            }
+          });
+        }
       }
 
       contents.push({ role: 'user', parts });
@@ -137,7 +141,7 @@ export class HybridAIEngine {
         }
       });
 
-      return { text: response.text || "I'm sorry, I couldn't generate a response.", model: "Gemini 2.5 Flash" };
+      return { text: response.text || "I'm sorry, I couldn't generate a response.", model: "Gemini 3.1 Flash" };
     } catch (error: any) {
       console.error("AI Engine Error:", error);
       return { text: "Error: Failed to connect to AI engine.", model: "Error" };
@@ -147,7 +151,7 @@ export class HybridAIEngine {
   private async orchestrate(prompt: string): Promise<AITaskType> {
     try {
       const response = await this.ai.models.generateContent({
-        model: 'gemini-2.0-flash',
+        model: 'gemini-3-flash-preview',
         contents: [{ 
           role: 'user', 
           parts: [{ 
@@ -179,7 +183,7 @@ export class HybridAIEngine {
       contents.push({ role: 'user', parts: [{ text: prompt }] });
 
       const response = await this.ai.models.generateContent({
-        model: 'gemini-2.0-flash',
+        model: 'gemini-3-flash-preview',
         contents: contents,
         config: {
           tools: [{ googleSearch: {} }]
