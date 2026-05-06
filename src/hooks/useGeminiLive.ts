@@ -12,6 +12,7 @@ export function useGeminiLive() {
   const isConnectedRef = useRef(false);
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [isModelSpeaking, setIsModelSpeaking] = useState(false);
   const [volume, setVolume] = useState(0);
@@ -24,35 +25,41 @@ export function useGeminiLive() {
   const isPlayingRef = useRef(false);
   const nextStartTimeRef = useRef(0);
 
-  const playQueuedAudio = useCallback(() => {
+  const playQueuedAudio = useCallback(async () => {
     if (!audioContextRef.current || audioQueueRef.current.length === 0) return;
 
-    const chunk = audioQueueRef.current.shift()!;
-    const buffer = audioContextRef.current.createBuffer(1, chunk.length, OUTPUT_SAMPLE_RATE);
-    buffer.getChannelData(0).set(chunk);
+    // Ensure context is running
+    if (audioContextRef.current.state === 'suspended') {
+      try { await audioContextRef.current.resume(); } catch (e) {}
+    }
 
-    const source = audioContextRef.current.createBufferSource();
-    source.buffer = buffer;
-    source.connect(audioContextRef.current.destination);
+    while (audioQueueRef.current.length > 0) {
+      const chunk = audioQueueRef.current.shift()!;
+      const buffer = audioContextRef.current.createBuffer(1, chunk.length, OUTPUT_SAMPLE_RATE);
+      buffer.getChannelData(0).set(chunk);
 
-    const startTime = Math.max(audioContextRef.current.currentTime, nextStartTimeRef.current);
-    source.start(startTime);
-    nextStartTimeRef.current = startTime + buffer.duration;
+      const source = audioContextRef.current.createBufferSource();
+      source.buffer = buffer;
+      source.connect(audioContextRef.current.destination);
 
-    setIsModelSpeaking(true);
+      const now = audioContextRef.current.currentTime;
+      const startTime = Math.max(now, nextStartTimeRef.current);
+      
+      source.start(startTime);
+      nextStartTimeRef.current = startTime + buffer.duration;
+      
+      setIsModelSpeaking(true);
 
-    source.onended = () => {
-      if (audioQueueRef.current.length > 0) {
-        playQueuedAudio();
-      } else {
+      source.onended = () => {
         if (audioContextRef.current && audioContextRef.current.currentTime >= nextStartTimeRef.current - 0.1) {
           setIsModelSpeaking(false);
         }
-      }
-    };
+      };
+    }
   }, []);
 
   const disconnect = useCallback(() => {
+    setError(null);
     if (sessionRef.current) {
       try { sessionRef.current.close(); } catch(e) {}
       sessionRef.current = null;
@@ -83,11 +90,17 @@ export function useGeminiLive() {
   const connect = useCallback(async () => {
     if (isConnected || isConnecting) return;
     setIsConnecting(true);
+    setError(null);
 
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
       
-      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const AudioContextClass = (window.AudioContext || (window as any).webkitAudioContext);
+      audioContextRef.current = new AudioContextClass();
+      
+      if (audioContextRef.current.state === 'suspended') {
+        await audioContextRef.current.resume();
+      }
       
       const session = await ai.live.connect({
         model: "gemini-3.1-flash-live-preview",
@@ -140,12 +153,20 @@ export function useGeminiLive() {
             setIsConnecting(false);
             console.log("Gemini Live closed");
           },
-          onerror: (error) => {
+          onerror: (error: any) => {
             console.error("Gemini Live error:", error);
-            if (error instanceof ErrorEvent) {
-              console.error("ErrorEvent message:", error.message);
+            let errorMessage = "An unexpected error occurred.";
+            
+            if (error?.message?.includes("Resource has been exhausted")) {
+              errorMessage = "API Quota exceeded. Please try again later or check your Gemini API plan.";
+            } else if (error?.message) {
+              errorMessage = error.message;
             }
+            
+            setError(errorMessage);
             setIsConnecting(false);
+            isConnectedRef.current = false;
+            setIsConnected(false);
           }
         }
       });
@@ -216,6 +237,8 @@ export function useGeminiLive() {
     volume,
     connect,
     disconnect,
-    sendVideoFrame
+    sendVideoFrame,
+    error,
+    resetError: () => setError(null)
   };
 }

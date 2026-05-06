@@ -245,9 +245,10 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
       );
       setConverterText(response.text);
       setConverterStatus('done');
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setConverterStatus('idle');
+      setConverterText(err.message || "An error occurred during conversion.");
+      setConverterStatus('done'); // Set to done so text area shows the error
     }
   };
 
@@ -650,7 +651,10 @@ ${response.text}`;
       setScanPhase('done');
       // Auto-read the extracted text
       speakResponse(response);
-    } catch (err) { setScanPhase('error'); } finally {
+    } catch (err: any) { 
+      setScannedText(err.message || "Error: Failed to analyze the document.");
+      setScanPhase('error'); 
+    } finally {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(t => t.stop());
         streamRef.current = null;
@@ -731,14 +735,37 @@ ${response.text}`;
                       <div className="bg-white/5 border border-white/5 rounded-3xl p-6 mb-6">
                         <div className="flex justify-between items-center mb-6">
                           <div className="text-[10px] font-black text-indigo-400 tracking-widest uppercase">GEMINI LIVE STATUS</div>
-                          <div className={`w-2 h-2 rounded-full transition-all ${geminiLive.isConnected ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]' : 'bg-slate-500'}`} />
+                          <div className={`w-2 h-2 rounded-full transition-all ${geminiLive.error ? 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.5)]' : geminiLive.isConnected ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]' : 'bg-slate-500'}`} />
                         </div>
+                        
+                        {geminiLive.error && (
+                          <div className="mb-4 p-4 bg-red-500/10 border border-red-500/20 rounded-xl flex flex-col gap-3">
+                            <div className="flex items-start gap-3">
+                              <AlertCircle size={14} className="text-red-400 mt-0.5 flex-shrink-0" />
+                              <div className="text-[10px] font-bold text-red-300 leading-tight">
+                                {geminiLive.error}
+                              </div>
+                            </div>
+                            <button 
+                              onClick={() => {
+                                geminiLive.disconnect();
+                                (geminiLive as any).resetError?.();
+                              }}
+                              className="w-full py-2 bg-red-500/20 hover:bg-red-500/30 text-red-200 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all"
+                            >
+                              Reset & Clear Session
+                            </button>
+                          </div>
+                        )}
                         
                         <div className="flex gap-3 mb-4">
                           <button 
                             onClick={() => geminiLive.isConnected ? geminiLive.disconnect() : geminiLive.connect()} 
+                            disabled={!!geminiLive.error && !geminiLive.isConnected}
                             className={`flex-[2] py-4 rounded-xl font-black text-sm transition-all flex items-center justify-center gap-2 ${
-                              geminiLive.isConnected ? 'bg-red-500 text-white shadow-lg' : 'bg-indigo-600 text-white shadow-[0_4px_15px_rgba(99,102,241,0.3)] hover:bg-indigo-500'
+                              geminiLive.isConnected ? 'bg-red-500 text-white shadow-lg' : 
+                              geminiLive.error ? 'bg-slate-800 text-slate-500 cursor-not-allowed' :
+                              'bg-indigo-600 text-white shadow-[0_4px_15px_rgba(99,102,241,0.3)] hover:bg-indigo-500'
                             }`}
                           >
                             {geminiLive.isConnected ? <Square size={18} /> : <Mic size={18} />}
@@ -1010,7 +1037,9 @@ ${response.text}`;
                               </span>
                             </div>
                           )}
-                          <div className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</div>
+                          <div className="text-sm leading-relaxed">
+                            <ReactMarkdown>{msg.content}</ReactMarkdown>
+                          </div>
                           
                           <div className="mt-4 flex items-center justify-between">
                             <div className="text-[9px] font-black text-slate-500 uppercase tracking-widest">
@@ -1325,6 +1354,32 @@ ${response.text}`;
                   <div className="flex-1 bg-black rounded-3xl overflow-hidden relative border border-white/10">
                     <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
                     <canvas ref={canvasRef} className="hidden" />
+                    {scanPhase === 'error' && (
+                      <div className="absolute inset-0 bg-red-950/90 backdrop-blur-md flex flex-col items-center justify-center z-20 p-8 text-center">
+                        <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mb-4 border border-red-500/30">
+                          <AlertTriangle className="text-red-500" size={32} />
+                        </div>
+                        <h3 className="text-xl font-black italic text-red-500 mb-2">ANALYSIS FAILED</h3>
+                        <p className="text-xs text-red-400/80 mb-6 max-w-xs">{scannedText}</p>
+                        <div className="flex gap-3">
+                          <button 
+                            onClick={() => setScanPhase('idle')}
+                            className="px-6 py-3 bg-white/5 border border-white/10 rounded-xl text-[10px] font-black text-slate-400 uppercase tracking-widest hover:bg-white/10 transition-all flex items-center gap-2"
+                          >
+                            <X size={14} /> Close
+                          </button>
+                          <button 
+                            onClick={() => {
+                              setScanPhase('idle');
+                              setScannedText('');
+                            }}
+                            className="px-6 py-3 bg-red-500 rounded-xl text-[10px] font-black text-white uppercase tracking-widest hover:bg-red-400 transition-all shadow-lg flex items-center gap-2"
+                          >
+                            <RotateCcw size={14} /> Reset System
+                          </button>
+                        </div>
+                      </div>
+                    )}
                     {scanPhase === 'processing' && (
                       <div className="absolute inset-0 bg-black/80 backdrop-blur-md flex flex-col items-center justify-center z-20">
                         <button 
@@ -1342,12 +1397,27 @@ ${response.text}`;
                         <div className="flex flex-col items-center gap-4">
                           <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
                           <div className="text-[10px] font-black tracking-[0.3em] uppercase text-indigo-400 animate-pulse">Analyzing Document</div>
-                          <button 
-                            onClick={() => setScanPhase('idle')}
-                            className="mt-4 px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-[10px] font-black text-slate-500 uppercase tracking-widest hover:bg-white/10 transition-all"
-                          >
-                            Cancel Process
-                          </button>
+                          <div className="flex gap-2">
+                            <button 
+                              onClick={() => setScanPhase('idle')}
+                              className="px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-[10px] font-black text-slate-500 uppercase tracking-widest hover:bg-white/10 transition-all flex items-center gap-2"
+                            >
+                              <X size={12} /> Cancel
+                            </button>
+                            <button 
+                              onClick={() => {
+                                setScanPhase('idle');
+                                setScannedText('');
+                                if (streamRef.current) {
+                                  streamRef.current.getTracks().forEach(t => t.stop());
+                                  streamRef.current = null;
+                                }
+                              }}
+                              className="px-4 py-2 bg-indigo-500/10 border border-indigo-500/20 rounded-lg text-[10px] font-black text-indigo-400 uppercase tracking-widest hover:bg-indigo-500/20 transition-all flex items-center gap-2"
+                            >
+                              <RotateCcw size={12} /> Reset
+                            </button>
+                          </div>
                         </div>
                       </div>
                     )}
@@ -1525,12 +1595,24 @@ ${response.text}`;
                         <div className="flex flex-col items-center gap-4">
                           <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
                           <div className="text-[10px] font-black tracking-[0.3em] uppercase text-indigo-400 animate-pulse text-center max-w-[200px]">Nexus AI is analyzing the document...</div>
-                          <button 
-                            onClick={() => setConverterStatus('idle')}
-                            className="mt-4 px-4 py-2 bg-indigo-500/10 border border-indigo-500/30 rounded-lg text-[10px] font-black text-indigo-400 uppercase tracking-widest hover:bg-indigo-500/20"
-                          >
-                            Stop Extraction
-                          </button>
+                          <div className="flex gap-2">
+                            <button 
+                              onClick={() => setConverterStatus('idle')}
+                              className="mt-4 px-4 py-2 bg-indigo-500/10 border border-indigo-500/30 rounded-lg text-[10px] font-black text-indigo-400 uppercase tracking-widest hover:bg-indigo-500/20 flex items-center gap-2"
+                            >
+                              <X size={12} /> Stop Extraction
+                            </button>
+                            <button 
+                              onClick={() => {
+                                setConverterStatus('idle');
+                                setConverterImage(null);
+                                setConverterText('');
+                              }}
+                              className="mt-4 px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-[10px] font-black text-slate-400 uppercase tracking-widest hover:bg-white/10 flex items-center gap-2"
+                            >
+                              <RotateCcw size={12} /> Reset
+                            </button>
+                          </div>
                         </div>
                       </div>
                     )}

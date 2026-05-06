@@ -144,7 +144,13 @@ export class HybridAIEngine {
       return { text: response.text || "I'm sorry, I couldn't generate a response.", model: "Gemini 3.1 Flash" };
     } catch (error: any) {
       console.error("AI Engine Error:", error);
-      return { text: "Error: Failed to connect to AI engine.", model: "Error" };
+      let errorMessage = "Error: Failed to connect to AI engine.";
+      if (error?.message?.includes("Resource has been exhausted")) {
+        errorMessage = "AI Quota exceeded. Please try again later or check your Gemini API plan.";
+      } else if (error?.message) {
+        errorMessage = `Error: ${error.message}`;
+      }
+      return { text: errorMessage, model: "Error" };
     }
   }
 
