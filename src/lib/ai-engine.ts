@@ -43,8 +43,8 @@ export class HybridAIEngine {
     return {
       builtIn: !!this.ai,
       voiceModel: 'Gemini 3.1 Flash (Direct)',
-      draftModel: 'Gemini 3.1 Flash',
-      searchModel: 'Gemini 3.1 Flash (Search)',
+      draftModel: 'Gemini 3.1 Flash (Pro-Logic)',
+      searchModel: 'Gemini 3.1 Flash (Grounding)',
       isLocalReady: true,
       loadProgress: 100
     };
@@ -61,15 +61,29 @@ export class HybridAIEngine {
     }
 
     try {
-      // Direct use of Gemini 3 Flash
-      const modelName = 'gemini-3-flash-preview';
+      // Use Gemini 3.1 Flash Preview as requested
+      const modelName = 'gemini-3.1-flash-preview';
       const contents: any[] = history.map(m => ({
         role: m.role === 'assistant' ? 'model' : 'user',
         parts: [{ text: m.content }]
       }));
       contents.push({ role: 'user', parts: [{ text: prompt }] });
 
-      const systemInstruction = "You are Nexus Justice, a professional legal voice assistant. You are currently speaking to the user via voice. Keep your responses EXTREMELY concise, formal, and helpful. Answer directly without unnecessary preamble. Maintain context from previous turns in the conversation. If the user speaks to you in Malayalam (or any other language), you MUST respond in that same language. Your goal is to be a seamless extension of the advocate's workflow. \n\nCRITICAL CONVERSATIONAL RULES:\n1. Never just stop after answering a question. \n2. Always encourage the user to ask more or talk more. \n3. Identify the most complex or 'toughest' part of your current answer and proactively ask the user if they want to know more about that specific detail.\n4. End your response with a concise open-ended question.";
+      const systemInstruction = `You are Nexus Justice, a professional polyglot legal assistant with deep expertise in Indian Laws and regional languages, especially Malayalam. 
+
+LANGUAGE CAPABILITIES:
+- You are fluent in Malayalam, Hindi, Tamil, Telugu, Kannada, Bengali, and English.
+- You understand regional legal terminology (e.g., Kacheri, Vakalat, Aadhar, etc.).
+- If the user speaks to you in Malayalam, you MUST respond in Malayalam with native-level fluency and cultural nuance.
+- You can translate legal documents between any of these languages perfectly.
+
+VOICE INTERACTION RULES:
+1. Keep responses EXTREMELY concise and formal.
+2. Maintain context from previous turns.
+3. Identify the most complex legal part of your answer and ask if the user wants to know more about that.
+4. End with a concise open-ended question to keep the conversation flowing.
+
+In Malayalam: "ഞാൻ നെക്സസ് ജസ്റ്റിസ് ആണ്, നിങ്ങളുടെ നിയമപരമായ സഹായി. എങ്ങനെ സഹായിക്കണം?" (I am Nexus Justice, your legal assistant. How can I help?)`;
 
       const responseStream = await this.ai.models.generateContentStream({
         model: modelName,
@@ -84,9 +98,16 @@ export class HybridAIEngine {
           yield chunk.text;
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Streaming Error:", error);
-      yield "Error: Failed to connect to AI engine.";
+      let rawMsg = typeof error === 'string' ? error : (error?.message || String(error));
+      if (rawMsg.includes("Resource has been exhausted")) {
+        yield "Error: AI Quota exceeded. Please try again later.";
+      } else if (rawMsg.includes("Network error") || rawMsg.includes("Failed to fetch")) {
+        yield "Error: Network connection failed. Please check your internet connection.";
+      } else {
+        yield "Error: Failed to connect to AI engine.";
+      }
     }
   }
 
@@ -109,7 +130,7 @@ export class HybridAIEngine {
         return { text, model: "Gemini 3.1 Flash (Search)" };
       }
 
-      const modelName = 'gemini-3-flash-preview';
+      const modelName = 'gemini-3.1-flash-preview';
       const contents: any[] = history.map(m => ({
         role: m.role === 'assistant' ? 'model' : 'user',
         parts: [{ text: m.content }]
@@ -131,7 +152,10 @@ export class HybridAIEngine {
 
       contents.push({ role: 'user', parts });
 
-      const systemInstruction = "You are Nexus Justice, a professional legal assistant. Be concise, formal, and helpful. Use legal terminology correctly. If responding in Malayalam, ensure accuracy. Maintain context.";
+      const systemInstruction = `You are Nexus Justice, a professional polyglot legal assistant. 
+Expert in Indian Law and regional languages: Malayalam, Hindi, Tamil, Telugu, Kannada, Bengali.
+Be concise, formal, and helpful. Use legal terminology correctly. 
+If responding in Malayalam, ensure native-level accuracy. Maintain conversation context.`;
 
       const response = await this.ai.models.generateContent({
         model: modelName,
@@ -144,11 +168,15 @@ export class HybridAIEngine {
       return { text: response.text || "I'm sorry, I couldn't generate a response.", model: "Gemini 3.1 Flash" };
     } catch (error: any) {
       console.error("AI Engine Error:", error);
+      let rawMsg = typeof error === 'string' ? error : (error?.message || String(error));
       let errorMessage = "Error: Failed to connect to AI engine.";
-      if (error?.message?.includes("Resource has been exhausted")) {
+      
+      if (rawMsg.includes("Resource has been exhausted")) {
         errorMessage = "AI Quota exceeded. Please try again later or check your Gemini API plan.";
-      } else if (error?.message) {
-        errorMessage = `Error: ${error.message}`;
+      } else if (rawMsg.includes("Network error") || rawMsg.includes("Failed to fetch")) {
+        errorMessage = "Network connection failed. Please check your internet connection.";
+      } else {
+        errorMessage = `Error: ${rawMsg}`;
       }
       return { text: errorMessage, model: "Error" };
     }

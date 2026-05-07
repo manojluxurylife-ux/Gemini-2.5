@@ -96,7 +96,12 @@ export function useGeminiLive() {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
       
       const AudioContextClass = (window.AudioContext || (window as any).webkitAudioContext);
-      audioContextRef.current = new AudioContextClass();
+      try {
+        audioContextRef.current = new AudioContextClass({ sampleRate: 16000 });
+      } catch (e) {
+        console.warn("Could not force 16kHz sample rate, using default:", e);
+        audioContextRef.current = new AudioContextClass();
+      }
       
       if (audioContextRef.current.state === 'suspended') {
         await audioContextRef.current.resume();
@@ -111,7 +116,11 @@ export function useGeminiLive() {
           },
           inputAudioTranscription: {},
           outputAudioTranscription: {},
-          systemInstruction: "You are Nexus, a highly advanced legal AI voice assistant. Your goal is to be helpful, concise, and professional. Use legal terminology correctly. You handle interruptions naturally. Keep your responses brief.",
+          systemInstruction: `You are Nexus, a highly advanced polyglot legal AI voice assistant expert in Indian Law. 
+You are fluent in Malayalam, Hindi, Tamil, Telugu, Kannada, and English.
+If the user speaks in any of these languages, respond fluently in that same language.
+Your goal is to be helpful, concise, and professional. Use legal terminology correctly. 
+You handle interruptions naturally. Keep your responses brief and helpful.`,
         },
         callbacks: {
           onopen: () => {
@@ -155,12 +164,23 @@ export function useGeminiLive() {
           },
           onerror: (error: any) => {
             console.error("Gemini Live error:", error);
+            let rawMsg = "";
+            if (typeof error === 'string') rawMsg = error;
+            else if (error?.message) rawMsg = error.message;
+            else if (error?.error?.message) rawMsg = error.error.message;
+            else if (error instanceof ErrorEvent) rawMsg = error.message;
+            else rawMsg = JSON.stringify(error);
+
             let errorMessage = "An unexpected error occurred.";
             
-            if (error?.message?.includes("Resource has been exhausted")) {
+            if (rawMsg.includes("Resource has been exhausted")) {
               errorMessage = "API Quota exceeded. Please try again later or check your Gemini API plan.";
-            } else if (error?.message) {
-              errorMessage = error.message;
+            } else if (rawMsg.includes("Network error") || rawMsg.includes("Failed to fetch") || rawMsg.includes("WebSocket")) {
+              errorMessage = "Network connection failed. Please check your internet connection and try again.";
+            } else if (rawMsg.includes("UNAVAILABLE")) {
+              errorMessage = "The AI service is currently unavailable. Please try again in a few moments.";
+            } else {
+              errorMessage = rawMsg;
             }
             
             setError(errorMessage);
@@ -212,8 +232,25 @@ export function useGeminiLive() {
       source.connect(processor);
       processor.connect(audioContextRef.current.destination);
 
-    } catch (error) {
-      console.error("Failed to connect:", error);
+    } catch (e: any) {
+      console.error("Failed to connect:", e);
+      let rawMsg = "";
+      if (typeof e === 'string') rawMsg = e;
+      else if (e?.message) rawMsg = e.message;
+      else if (e?.error?.message) rawMsg = e.error.message;
+      else rawMsg = String(e);
+
+      let msg = "Failed to establish connection.";
+      if (rawMsg.includes("Resource has been exhausted")) {
+        msg = "API Quota exceeded. Please try again later.";
+      } else if (rawMsg.includes("Network error") || rawMsg.includes("Failed to fetch") || rawMsg.includes("WebSocket")) {
+        msg = "Network connection failed. Please check your internet connection.";
+      } else if (rawMsg.includes("UNAVAILABLE")) {
+        msg = "The AI service is temporarily unavailable. Please try again later.";
+      } else {
+        msg = rawMsg;
+      }
+      setError(msg);
       setIsConnecting(false);
     }
   }, [isConnected, isConnecting, playQueuedAudio]);

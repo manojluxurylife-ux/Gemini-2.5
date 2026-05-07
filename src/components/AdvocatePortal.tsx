@@ -4,7 +4,7 @@ import {
   BookOpen, Edit3, Layout, MessageSquare, Settings, 
   Download, Globe, Wifi, WifiOff, Shield, Save, Trash2,
   ChevronLeft, ChevronRight, Play, Square, Copy, ExternalLink,
-  CheckCircle, AlertTriangle, Info, X, Search, Plus, RotateCcw,
+  CheckCircle, AlertTriangle, Info, X, Search, Plus, RotateCcw, RefreshCw,
   Volume2, Send, Trash, Check, AlertCircle, LogOut, Upload, File,
   Maximize2, Minimize2, Cpu, Cloud, Zap
 } from "lucide-react";
@@ -94,15 +94,6 @@ const topTabs = [
   { id: 'convert', label: 'CONVERT' },
 ];
 
-const CONVERTER_STEPS = [
-  { id: 1, title: 'Camera Capture', desc: 'Snap photos of physical documents', icon: <Camera size={14} />, color: '#6366f1' },
-  { id: 2, title: 'File Upload', desc: 'Select images from your device', icon: <Upload size={14} />, color: '#10b981' },
-  { id: 3, title: 'AI Extraction', desc: 'High-precision text recognition', icon: <Search size={14} />, color: '#f59e0b' },
-  { id: 4, title: 'AI Translation', desc: 'Convert to any language', icon: <Globe size={14} />, color: '#8b5cf6' },
-  { id: 5, title: 'PDF Export', desc: 'Save as professional PDF', icon: <FileText size={14} />, color: '#ef4444' },
-  { id: 6, title: 'Word Export', desc: 'Save as editable .docx', icon: <File size={14} />, color: '#3b82f6' },
-];
-
 const S = {
   page: { display: 'flex', height: '100vh', background: '#020617', color: '#e2e8f0', fontFamily: "'Inter', system-ui, sans-serif", overflow: 'hidden', fontSize: 14 },
   sidebar: { width: 72, background: '#070b14', borderRight: '1px solid rgba(255,255,255,.05)', display: 'flex' as const, flexDirection: 'column' as const, alignItems: 'center', padding: '0', gap: 8, flexShrink: 0, overflowY: 'auto' as const },
@@ -185,6 +176,7 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
   const [isPreviewEnlarged, setIsPreviewEnlarged] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+
   const aiEngine = HybridAIEngine.getInstance();
   const localDB = LocalDB.getInstance();
   const geminiLive = useGeminiLive();
@@ -198,12 +190,29 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
   const [consoleInput, setConsoleInput] = useState("");
   const [consoleLoading, setConsoleLoading] = useState(false);
   
+  const [isScannerEnlarged, setIsScannerEnlarged] = useState(false);
   const [scanPhase, setScanPhase] = useState<'idle' | 'starting' | 'live' | 'processing' | 'done' | 'error'>('idle');
   const [scannedText, setScannedText] = useState('');
   const [liveCameraActive, setLiveCameraActive] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+
+  // Stop camera when view changes
+  useEffect(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+      setScanPhase('idle');
+    }
+  }, [view]);
+
+  // Ensure video stream is attached when live phase starts
+  useEffect(() => {
+    if (scanPhase === 'live' && videoRef.current && streamRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+    }
+  }, [scanPhase]);
 
   const [draftPages, setDraftPages] = useState(["IN THE COURT OF THE DISTRICT JUDGE...\n\n[Drafting starts here]"]);
   const [deskInput, setDeskInput] = useState('');
@@ -609,8 +618,9 @@ ${response.text}`;
   // Stream camera frames to Gemini Live if both are active
   useEffect(() => {
     let intervalId: any;
+    const isScannerActive = scanPhase === 'live';
     
-    if (geminiLive.isConnected && liveCameraActive && videoRef.current && canvasRef.current) {
+    if (geminiLive.isConnected && (liveCameraActive || isScannerActive) && videoRef.current && canvasRef.current) {
       const context = canvasRef.current.getContext('2d');
       
       intervalId = setInterval(() => {
@@ -635,7 +645,7 @@ ${response.text}`;
     return () => {
       if (intervalId) clearInterval(intervalId);
     };
-  }, [geminiLive.isConnected, liveCameraActive, geminiLive]);
+  }, [geminiLive.isConnected, liveCameraActive, scanPhase, geminiLive]);
 
   const captureScan = async () => {
     if (!videoRef.current || !canvasRef.current) return;
@@ -1349,378 +1359,472 @@ ${response.text}`;
             )}
 
             {view === 'read' && (
-              <motion.div key="read" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full p-6 flex gap-6">
-                <div className="w-1/2 flex flex-col gap-4">
-                  <div className="flex-1 bg-black rounded-3xl overflow-hidden relative border border-white/10">
-                    <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-                    <canvas ref={canvasRef} className="hidden" />
-                    {scanPhase === 'error' && (
-                      <div className="absolute inset-0 bg-red-950/90 backdrop-blur-md flex flex-col items-center justify-center z-20 p-8 text-center">
-                        <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mb-4 border border-red-500/30">
-                          <AlertTriangle className="text-red-500" size={32} />
-                        </div>
-                        <h3 className="text-xl font-black italic text-red-500 mb-2">ANALYSIS FAILED</h3>
-                        <p className="text-xs text-red-400/80 mb-6 max-w-xs">{scannedText}</p>
-                        <div className="flex gap-3">
-                          <button 
-                            onClick={() => setScanPhase('idle')}
-                            className="px-6 py-3 bg-white/5 border border-white/10 rounded-xl text-[10px] font-black text-slate-400 uppercase tracking-widest hover:bg-white/10 transition-all flex items-center gap-2"
-                          >
-                            <X size={14} /> Close
-                          </button>
-                          <button 
-                            onClick={() => {
-                              setScanPhase('idle');
-                              setScannedText('');
-                            }}
-                            className="px-6 py-3 bg-red-500 rounded-xl text-[10px] font-black text-white uppercase tracking-widest hover:bg-red-400 transition-all shadow-lg flex items-center gap-2"
-                          >
-                            <RotateCcw size={14} /> Reset System
-                          </button>
-                        </div>
-                      </div>
+              <motion.div key="read" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full p-6 flex flex-col gap-6 overflow-hidden">
+                <div className="flex justify-between items-center bg-slate-900/50 p-4 rounded-3xl border border-white/5">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-emerald-500/20 rounded-2xl flex items-center justify-center text-emerald-500 border border-emerald-500/20">
+                      <BookOpen size={20} />
+                    </div>
+                    <div>
+                      <div className="text-[10px] font-black uppercase tracking-widest text-emerald-500 leading-none mb-1">Document Reader</div>
+                      <div className="text-xl font-black italic text-slate-200 leading-none">Smart<span className="text-emerald-500">Scanner</span></div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {scannedText && (
+                      <button 
+                        onClick={() => speakResponse({ text: scannedText, model: "OCR" })}
+                        className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 shadow-lg shadow-indigo-500/20"
+                      >
+                        <Volume2 size={14} /> Read Aloud
+                      </button>
                     )}
-                    {scanPhase === 'processing' && (
-                      <div className="absolute inset-0 bg-black/80 backdrop-blur-md flex flex-col items-center justify-center z-20">
-                        <button 
-                          onClick={() => {
-                            setScanPhase('idle');
-                            if (streamRef.current) {
-                              streamRef.current.getTracks().forEach(t => t.stop());
-                              streamRef.current = null;
-                            }
-                          }}
-                          className="absolute top-4 right-4 p-2 bg-white/10 hover:bg-white/20 rounded-full text-white transition-all shadow-lg"
-                        >
-                          <X size={20} />
-                        </button>
-                        <div className="flex flex-col items-center gap-4">
-                          <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-                          <div className="text-[10px] font-black tracking-[0.3em] uppercase text-indigo-400 animate-pulse">Analyzing Document</div>
-                          <div className="flex gap-2">
+                    <button 
+                      onClick={() => setIsScannerEnlarged(!isScannerEnlarged)}
+                      className="p-3 bg-white/5 border border-white/10 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition-all"
+                      title={isScannerEnlarged ? "Split View" : "Enlarge Scanner"}
+                    >
+                      {isScannerEnlarged ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className={`flex-1 flex gap-6 overflow-hidden transition-all duration-500 ${isScannerEnlarged ? 'flex-col' : 'flex-row'}`}>
+                  <div className={`${isScannerEnlarged ? 'flex-[2]' : 'w-1/2'} flex flex-col gap-4 min-h-0`}>
+                    <div className="flex-1 bg-black rounded-3xl overflow-hidden relative border border-white/10 group">
+                      <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+                      <canvas ref={canvasRef} className="hidden" />
+                      
+                      {/* Scanning Line Animation */}
+                      {scanPhase === 'live' && (
+                        <>
+                          <motion.div 
+                            initial={{ top: '0%' }}
+                            animate={{ top: '100%' }}
+                            transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
+                            className="absolute left-0 right-0 h-1 bg-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.8)] z-10 pointer-events-none"
+                          />
+                          <div className="absolute top-4 left-4 right-4 flex justify-between items-center z-20">
+                            <button 
+                              onClick={() => {
+                                if (streamRef.current) {
+                                  streamRef.current.getTracks().forEach(t => t.stop());
+                                  streamRef.current = null;
+                                }
+                                setScanPhase('idle');
+                              }}
+                              className="p-3 bg-black/60 border border-white/10 rounded-xl text-white hover:bg-white/10 transition-all backdrop-blur-md"
+                              title="Close Scanner"
+                            >
+                              <X size={20} />
+                            </button>
+                            <div className="flex items-center gap-2 px-3 py-1.5 bg-black/60 rounded-lg border border-emerald-500/30 backdrop-blur-md">
+                              <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                              <span className="text-[10px] font-black text-emerald-400 uppercase tracking-widest">LIVE SCANNER ACTIVE</span>
+                            </div>
+                          </div>
+                        </>
+                      )}
+
+                      {/* Overlays */}
+                      {scanPhase === 'error' && (
+                        <div className="absolute inset-0 bg-red-950/90 backdrop-blur-md flex flex-col items-center justify-center z-20 p-8 text-center">
+                          <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mb-4 border border-red-500/30">
+                            <AlertTriangle className="text-red-500" size={32} />
+                          </div>
+                          <h3 className="text-xl font-black italic text-red-500 mb-2">ANALYSIS FAILED</h3>
+                          <p className="text-xs text-red-400/80 mb-6 max-w-xs">{scannedText}</p>
+                          <div className="flex gap-3">
                             <button 
                               onClick={() => setScanPhase('idle')}
-                              className="px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-[10px] font-black text-slate-500 uppercase tracking-widest hover:bg-white/10 transition-all flex items-center gap-2"
+                              className="px-6 py-3 bg-white/5 border border-white/10 rounded-xl text-[10px] font-black text-slate-400 uppercase tracking-widest hover:bg-white/10 transition-all flex items-center gap-2"
                             >
-                              <X size={12} /> Cancel
+                              <X size={14} /> Close
                             </button>
                             <button 
                               onClick={() => {
                                 setScanPhase('idle');
                                 setScannedText('');
-                                if (streamRef.current) {
-                                  streamRef.current.getTracks().forEach(t => t.stop());
-                                  streamRef.current = null;
-                                }
                               }}
-                              className="px-4 py-2 bg-indigo-500/10 border border-indigo-500/20 rounded-lg text-[10px] font-black text-indigo-400 uppercase tracking-widest hover:bg-indigo-500/20 transition-all flex items-center gap-2"
+                              className="px-6 py-3 bg-red-500 rounded-xl text-[10px] font-black text-white uppercase tracking-widest hover:bg-red-400 transition-all shadow-lg flex items-center gap-2"
                             >
-                              <RotateCcw size={12} /> Reset
+                              <RotateCcw size={14} /> Reset System
                             </button>
                           </div>
                         </div>
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex gap-3">
-                    <button onClick={scanPhase === 'live' ? captureScan : startScan} className="flex-1 py-4 bg-emerald-600 rounded-2xl font-bold flex items-center justify-center gap-2">
-                      {scanPhase === 'live' ? <Camera size={20} /> : <Play size={20} />}
-                      {scanPhase === 'live' ? 'Capture & Read' : 'Start Camera'}
-                    </button>
-                    {scannedText && (
-                      <button onClick={() => speakResponse({ text: scannedText, model: "OCR" })} className="p-4 bg-indigo-600 rounded-2xl">
-                        <Volume2 size={24} />
-                      </button>
-                    )}
-                    {scannedText && (
+                      )}
+
+                      {scanPhase === 'processing' && (
+                        <div className="absolute inset-0 bg-black/80 backdrop-blur-md flex flex-col items-center justify-center z-20">
+                          <div className="flex flex-col items-center gap-6">
+                            <div className="relative">
+                              <div className="w-16 h-16 border-4 border-emerald-500/20 rounded-full" />
+                              <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin absolute inset-0" />
+                            </div>
+                            <div className="text-center">
+                              <div className="text-[10px] font-black tracking-[0.3em] uppercase text-emerald-500 animate-pulse mb-2">Nexus Brain Active</div>
+                              <div className="text-sm font-bold text-slate-400">Extracting legal intelligence...</div>
+                            </div>
+                            <button 
+                              onClick={() => setScanPhase('idle')}
+                              className="px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-[10px] font-black text-slate-500 uppercase tracking-widest hover:bg-white/10 transition-all"
+                            >
+                              Cancel Process
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex gap-3">
                       <button 
-                        onClick={() => {
-                          setDraftFacts(prev => prev + (prev.trim() ? "\n\n" : "") + scannedText);
-                          setView('drafting');
-                          setEnlargedElement('facts');
-                        }} 
-                        className="p-4 bg-emerald-600 rounded-2xl"
-                        title="Send to Drafting Facts"
+                        onClick={scanPhase === 'live' ? captureScan : startScan} 
+                        className={`flex-1 py-5 rounded-2xl font-black text-sm uppercase tracking-widest transition-all flex items-center justify-center gap-3 shadow-xl ${
+                          scanPhase === 'live' 
+                            ? 'bg-emerald-600 text-white shadow-emerald-500/20' 
+                            : 'bg-indigo-600 text-white shadow-indigo-500/20 hover:bg-indigo-500'
+                        }`}
                       >
-                        <Plus size={24} />
+                        {scanPhase === 'live' ? <Camera size={22} /> : <Play size={22} />}
+                        {scanPhase === 'live' ? 'Capture Document' : 'Initialize Scanner'}
                       </button>
-                    )}
+                      
+                      {scannedText && (
+                        <div className="flex gap-2">
+                          <button 
+                            onClick={() => {
+                              setDraftFacts(prev => prev + (prev.trim() ? "\n\n" : "") + scannedText);
+                              setView('drafting');
+                              setEnlargedElement('facts');
+                            }} 
+                            className="p-5 bg-amber-500 text-black rounded-2xl shadow-xl shadow-amber-500/20 active:scale-95 transition-all"
+                            title="Send to Drafting Facts"
+                          >
+                            <Edit3 size={24} />
+                          </button>
+                          <button 
+                            onClick={exportToPDF}
+                            className="p-5 bg-red-600 text-white rounded-2xl shadow-xl shadow-red-500/20 active:scale-95 transition-all"
+                            title="Export as PDF"
+                          >
+                            <Download size={24} />
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-                <div className="flex-1 bg-slate-900/50 border border-white/5 rounded-3xl p-6 overflow-y-auto relative">
-                  <div className="flex justify-between items-center mb-4">
-                    <div className="text-[10px] font-black uppercase tracking-widest text-emerald-500">Extracted Text</div>
-                    {scannedText && <button onClick={() => setScannedText("")} className="text-slate-500 hover:text-white text-[10px] uppercase font-black tracking-widest">Clear</button>}
+
+                  <div className={`${isScannerEnlarged ? 'flex-1' : 'flex-1'} bg-slate-900/50 border border-white/5 rounded-3xl p-6 flex flex-col min-h-0 overflow-hidden`}>
+                    <div className="flex justify-between items-center mb-6">
+                      <div className="flex items-center gap-3">
+                        <div className="w-1.5 h-6 bg-emerald-500 rounded-full" />
+                        <div className="text-[10px] font-black uppercase tracking-widest text-emerald-500">Intelligence Output</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {scannedText && (
+                          <button 
+                            onClick={() => handleCopy(scannedText)}
+                            className="p-2 bg-white/5 border border-white/10 rounded-lg text-slate-400 hover:text-white transition-all" 
+                            title="Copy Text"
+                          >
+                            <Copy size={14} />
+                          </button>
+                        )}
+                        {scannedText && (
+                          <button 
+                            onClick={() => setScannedText("")} 
+                            className="px-3 py-1 bg-red-500/10 border border-red-500/20 text-red-500 text-[9px] uppercase font-black tracking-widest rounded-lg hover:bg-red-500/20 transition-all"
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex-1 bg-black/40 rounded-2xl p-6 overflow-y-auto custom-scrollbar relative border border-white/5">
+                      <div className="text-sm text-slate-300 font-mono leading-[2] whitespace-pre-wrap">
+                        {scannedText || (
+                          <div className="h-full flex flex-col items-center justify-center text-slate-600 gap-4">
+                            <div className="w-16 h-16 bg-white/5 rounded-full flex items-center justify-center opacity-50">
+                              <FileText size={32} />
+                            </div>
+                            <div className="text-xs font-medium italic">Scanner is idle. Capture a document to begin analysis...</div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                  <div className="text-sm text-slate-400 font-mono leading-relaxed whitespace-pre-wrap">{scannedText || "Waiting for capture..."}</div>
                 </div>
               </motion.div>
             )}
 
             {view === 'convert' && (
-              <motion.div key="convert" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full p-6 flex gap-6 overflow-hidden">
-                {/* Left Sidebar: Tools & Image Preview */}
-                <div className="w-[280px] flex flex-col gap-4 flex-shrink-0 overflow-y-auto pr-2 custom-scrollbar">
-                  <div className="bg-slate-900/50 border border-white/5 rounded-3xl p-6">
-                    <div className="text-[10px] font-black uppercase tracking-widest text-indigo-500 mb-4">Nexus Tools</div>
-                    <h3 className="text-2xl font-black italic mb-6">Doc<span className="text-slate-500">Converter</span></h3>
-                    
-                    <div className="flex flex-col gap-3">
-                      <button 
-                        onClick={() => {
-                          if (scanPhase !== 'live') startScan();
-                          else captureForConverter();
-                        }} 
-                        className="w-full py-4 bg-white/5 border border-white/10 rounded-2xl font-bold flex items-center justify-center gap-3 text-indigo-400 hover:bg-white/10 transition-all"
-                      >
-                        <Camera size={20} /> {scanPhase === 'live' ? 'Capture Document' : 'Use Camera'}
-                      </button>
-                      <button 
-                        onClick={() => fileInputRef.current?.click()} 
-                        className="w-full py-4 bg-white/5 border border-white/10 rounded-2xl font-bold flex items-center justify-center gap-3 text-emerald-400 hover:bg-white/10 transition-all"
-                      >
-                        <Upload size={20} /> Upload from Device
-                      </button>
-                      <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept="image/*" className="hidden" />
+              <motion.div key="convert" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full p-6 flex flex-col gap-6 overflow-hidden">
+                <div className="flex justify-between items-center bg-slate-900/50 p-4 rounded-3xl border border-white/5">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-indigo-500/20 rounded-2xl flex items-center justify-center text-indigo-500 border border-indigo-500/20">
+                      <RefreshCw size={20} />
+                    </div>
+                    <div>
+                      <div className="text-[10px] font-black uppercase tracking-widest text-indigo-500 leading-none mb-1">Document Processor</div>
+                      <div className="text-xl font-black italic text-slate-200 leading-none">Nexus<span className="text-indigo-500">Converter</span></div>
                     </div>
                   </div>
-
-                  {scanPhase === 'live' ? (
-                    <div className="bg-slate-900/50 border border-indigo-500/30 rounded-3xl p-4 flex flex-col gap-4">
-                      <div className="aspect-[3/4] bg-black rounded-2xl overflow-hidden border border-white/10 relative">
-                        <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-                        <div className="absolute top-2 right-2 flex items-center gap-2 px-2 py-1 bg-black/60 rounded-lg border border-indigo-500/30">
-                          <div className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
-                          <span className="text-[8px] font-black text-indigo-400 uppercase tracking-widest leading-none">SCANNING DOCUMENT</span>
+                  <div className="flex items-center gap-3">
+                    <button 
+                      onClick={() => fileInputRef.current?.click()} 
+                      className="px-6 py-2 bg-white/5 hover:bg-white/10 text-emerald-400 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 border border-white/10"
+                    >
+                      <Upload size={14} /> Upload Image
+                    </button>
+                    <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept="image/*" className="hidden" />
+                    <button 
+                      onClick={() => setIsScannerEnlarged(!isScannerEnlarged)}
+                      className="p-3 bg-white/5 border border-white/10 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition-all"
+                      title={isScannerEnlarged ? "Split View" : "Enlarge Scanner"}
+                    >
+                      {isScannerEnlarged ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+                    </button>
+                  </div>
+                </div>
+                    
+                <div className={`flex-1 flex gap-6 overflow-hidden transition-all duration-500 ${isScannerEnlarged ? 'flex-col' : 'flex-row'}`}>
+                  {/* Left Column: Input (Camera/Preview) */}
+                  <div className={`${isScannerEnlarged ? 'flex-[1.5]' : 'w-1/2'} flex flex-col gap-4 min-h-0`}>
+                    <div className="flex-1 bg-black rounded-3xl overflow-hidden relative border border-white/10 group">
+                      {scanPhase === 'live' ? (
+                        <>
+                          <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+                          <motion.div 
+                            initial={{ top: '0%' }}
+                            animate={{ top: '100%' }}
+                            transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
+                            className="absolute left-0 right-0 h-1 bg-indigo-500 shadow-[0_0_15px_rgba(79,70,229,0.8)] z-10 pointer-events-none"
+                          />
+                          <div className="absolute top-4 left-4 right-4 flex justify-between items-center z-20">
+                            <button 
+                              onClick={() => {
+                                if (streamRef.current) {
+                                  streamRef.current.getTracks().forEach(t => t.stop());
+                                  streamRef.current = null;
+                                }
+                                setScanPhase('idle');
+                              }}
+                              className="p-3 bg-black/60 border border-white/10 rounded-xl text-white hover:bg-white/10 transition-all backdrop-blur-md"
+                              title="Close Scanner"
+                            >
+                              <X size={20} />
+                            </button>
+                            <div className="flex items-center gap-2 px-3 py-1.5 bg-black/60 rounded-lg border border-indigo-500/30 backdrop-blur-md">
+                              <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+                              <span className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">LIVE SCANNER ACTIVE</span>
+                            </div>
+                          </div>
+                        </>
+                      ) : converterImage ? (
+                        <div className="w-full h-full p-4 flex items-center justify-center bg-slate-950">
+                          <img src={converterImage} alt="Preview" className="max-w-full max-h-full object-contain rounded-xl shadow-2xl" />
+                          <button 
+                            onClick={() => setConverterImage(null)}
+                            className="absolute top-4 right-4 p-3 bg-red-500/10 border border-red-500/20 text-red-500 rounded-xl hover:bg-red-500/20 transition-all backdrop-blur-md"
+                          >
+                            <Trash2 size={20} />
+                          </button>
                         </div>
-                      </div>
-                      <div className="flex gap-2">
+                      ) : (
+                        <div className="h-full flex flex-col items-center justify-center text-slate-700 gap-6">
+                          <div className="w-24 h-24 bg-white/5 rounded-full flex items-center justify-center border border-white/5">
+                            <Camera size={48} className="opacity-20" />
+                          </div>
+                          <div className="text-center">
+                            <h4 className="text-lg font-black italic text-slate-500 mb-2">SCANNER STANDBY</h4>
+                            <p className="text-[10px] uppercase font-black tracking-widest text-slate-600">Snap a document or upload to begin</p>
+                          </div>
+                        </div>
+                      )}
+
+                      {converterStatus === 'processing' && (
+                        <div className="absolute inset-0 bg-black/80 backdrop-blur-md flex flex-col items-center justify-center z-20">
+                          <div className="flex flex-col items-center gap-6">
+                            <div className="relative">
+                              <div className="w-16 h-16 border-4 border-indigo-500/20 rounded-full" />
+                              <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin absolute inset-0" />
+                            </div>
+                            <div className="text-center">
+                              <div className="text-[10px] font-black tracking-[0.3em] uppercase text-indigo-500 animate-pulse mb-2">Analyzing Pixels</div>
+                              <div className="text-sm font-bold text-slate-400">Performing high-precision OCR...</div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex gap-3">
+                      <button 
+                        onClick={scanPhase === 'live' ? captureForConverter : startScan} 
+                        className={`flex-1 py-5 rounded-2xl font-black text-sm uppercase tracking-widest transition-all flex items-center justify-center gap-3 shadow-xl ${
+                          scanPhase === 'live' 
+                            ? 'bg-indigo-600 text-white shadow-indigo-500/20' 
+                            : 'bg-indigo-600/10 border border-indigo-500/20 text-indigo-400 shadow-indigo-500/20 hover:bg-indigo-600/20'
+                        }`}
+                      >
+                        <Camera size={22} />
+                        {scanPhase === 'live' ? 'Snap Document' : 'Initialize Camera'}
+                      </button>
+                      
+                      {converterImage && converterStatus !== 'processing' && (
                         <button 
-                          onClick={captureForConverter} 
-                          className="flex-1 py-4 bg-indigo-600 rounded-2xl font-bold flex items-center justify-center gap-2 shadow-[0_4px_15px_rgba(79,70,229,0.3)]"
+                          onClick={processConversion} 
+                          className="flex-1 py-5 bg-emerald-600 text-white rounded-2xl font-black text-sm uppercase tracking-widest shadow-xl shadow-emerald-500/20 hover:bg-emerald-500 active:scale-95 transition-all flex items-center justify-center gap-3"
                         >
-                          <Camera size={18} /> Snap Document
+                          <Zap size={22} /> Extract & Convert
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {/* Right Column: Results & Export */}
+                  <div className="flex-1 bg-slate-900/50 border border-white/5 rounded-3xl p-6 flex flex-col min-h-0 overflow-hidden">
+                    <div className="flex justify-between items-center mb-6">
+                      <div className="flex items-center gap-3">
+                        <div className="w-1.5 h-6 bg-indigo-500 rounded-full" />
+                        <div className="text-[10px] font-black uppercase tracking-widest text-indigo-500">Output Manifest</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {converterStatus === 'done' && (
+                          <div className="flex items-center gap-2 text-emerald-500 mr-4">
+                            <CheckCircle size={14} />
+                            <span className="text-[9px] font-black uppercase tracking-widest">Extraction Complete</span>
+                          </div>
+                        )}
+                        {converterText && (
+                          <button 
+                            onClick={() => handleCopy(converterText)}
+                            className="p-2 bg-white/5 border border-white/10 rounded-lg text-slate-400 hover:text-white transition-all" 
+                            title="Copy to Clipboard"
+                          >
+                            <Copy size={16} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex-1 bg-black/40 rounded-2xl p-6 overflow-y-auto custom-scrollbar relative border border-white/5 mb-6">
+                      <div className="text-sm text-slate-300 font-mono leading-[2] whitespace-pre-wrap">
+                        {converterText || (
+                          <div className="h-full flex flex-col items-center justify-center text-slate-600 gap-4">
+                            <div className="w-16 h-16 bg-white/5 rounded-full flex items-center justify-center opacity-50">
+                              <FileText size={32} />
+                            </div>
+                            <div className="text-xs font-medium italic">Output is currently empty...</div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {converterStatus === 'done' && (
+                      <div className="flex flex-col gap-6">
+                        <div className="p-5 bg-indigo-500/5 border border-indigo-500/20 rounded-2xl">
+                          <div className="flex items-center gap-2 mb-4 text-indigo-400">
+                            <Globe size={14} />
+                            <span className="text-[10px] font-black uppercase tracking-widest">Multilingual AI Translation</span>
+                          </div>
+                          <div className="flex gap-2 mb-4">
+                            <select 
+                              value={targetLanguage}
+                              onChange={(e) => setTargetLanguage(e.target.value)}
+                              className="flex-1 bg-black/50 border border-white/10 rounded-xl px-4 py-2 text-xs text-slate-300 focus:border-indigo-500 transition-all outline-none"
+                            >
+                              <option value="">Select Language...</option>
+                              <option value="Malayalam">Malayalam (മലയാളം)</option>
+                              <option value="Hindi">Hindi (हिन्दी)</option>
+                              <option value="Tamil">Tamil (தமிழ்)</option>
+                              <option value="Telugu">Telugu (తెలుగు)</option>
+                              <option value="Kannada">Kannada (കന്നഡ)</option>
+                              <option value="Bengali">Bengali (বাংলা)</option>
+                              <option value="Marathi">Marathi (मराठी)</option>
+                              <option value="English">English (British/Indian)</option>
+                            </select>
+                            <button 
+                              onClick={handleTranslate}
+                              disabled={!targetLanguage || isTranslating}
+                              className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+                                !targetLanguage || isTranslating 
+                                  ? 'bg-slate-800 text-slate-500 cursor-not-allowed' 
+                                  : 'bg-indigo-600 text-white hover:bg-indigo-500'
+                              }`}
+                            >
+                              {isTranslating ? 'Translating...' : 'Translate'}
+                            </button>
+                          </div>
+
+                          {translatedText && (
+                            <div className="bg-black/50 border border-white/10 rounded-xl p-4 relative group">
+                              <div className="text-[9px] font-black text-indigo-400 uppercase tracking-widest mb-2 border-b border-indigo-500/10 pb-1">Translation Result ({targetLanguage})</div>
+                              <div className="text-xs text-slate-300 leading-relaxed max-h-[150px] overflow-y-auto custom-scrollbar italic whitespace-pre-wrap">
+                                {translatedText}
+                              </div>
+                              <div className="absolute top-4 right-4 flex gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                                <button onClick={() => handleCopy(translatedText)} className="p-1.5 bg-white/5 border border-white/10 rounded-md text-slate-400 hover:text-white" title="Copy Translation">
+                                  <Copy size={12} />
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+                        <button onClick={exportToPDF} className="py-3 bg-red-600/10 border border-red-600/30 text-red-500 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-red-600/20 transition-all">
+                          <FileText size={16} /> PDF
+                        </button>
+                        <button onClick={exportToWord} className="py-3 bg-blue-600/10 border border-blue-600/30 text-blue-500 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-blue-600/20 transition-all">
+                          <File size={16} /> Word
                         </button>
                         <button 
                           onClick={() => {
-                            if (streamRef.current) {
-                              streamRef.current.getTracks().forEach(t => t.stop());
-                              streamRef.current = null;
-                            }
-                            setScanPhase('idle');
-                          }}
-                          className="p-4 bg-white/5 border border-white/10 rounded-2xl text-slate-400"
+                            setDraftFacts(prev => prev + (prev.trim() ? "\n\n" : "") + converterText);
+                            setView('drafting');
+                            setEnlargedElement('facts');
+                          }} 
+                          className="py-3 bg-amber-500/10 border border-amber-500/30 text-amber-500 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-amber-500/20 transition-all col-span-2 lg:col-span-1"
                         >
-                          <X size={20} />
+                          <Plus size={16} /> Draft
                         </button>
                       </div>
-                    </div>
-                  ) : converterImage && (
-                    <div className="bg-slate-900/50 border border-white/5 rounded-3xl p-4 flex flex-col gap-4">
-                      <div className="aspect-[3/4] bg-black rounded-2xl overflow-hidden border border-white/10 relative group">
-                        <img src={converterImage} alt="Preview" className="w-full h-full object-contain" />
-                        <button 
-                          onClick={() => setConverterImage(null)}
-                          className="absolute top-2 right-2 p-2 bg-black/60 rounded-lg text-white opacity-0 group-hover:opacity-100 transition-all"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                      <button 
-                        onClick={processConversion} 
-                        disabled={converterStatus === 'processing'} 
-                        className="w-full py-4 bg-indigo-600 rounded-2xl font-bold disabled:opacity-50 shadow-[0_4px_15px_rgba(79,70,229,0.3)] hover:bg-indigo-500 transition-all"
-                      >
-                        {converterStatus === 'processing' ? (
-                          <div className="flex items-center justify-center gap-3">
-                            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                            <span>AI Extraction...</span>
-                          </div>
-                        ) : 'Extract & Convert'}
-                      </button>
-                    </div>
-                  )}
-
-                  {converterStatus === 'done' && (
-                    <div className="flex flex-col gap-3">
-                      <button onClick={exportToPDF} className="w-full py-4 bg-red-600/20 border border-red-600/30 text-red-500 rounded-2xl font-bold flex items-center justify-center gap-3 hover:bg-red-600/30 transition-all">
-                        <FileText size={20} /> Export as PDF
-                      </button>
-                      <button onClick={exportToWord} className="w-full py-4 bg-blue-600/20 border border-blue-600/30 text-blue-500 rounded-2xl font-bold flex items-center justify-center gap-3 hover:bg-blue-600/30 transition-all">
-                        <File size={20} /> Export as Word
-                      </button>
-                      <button 
-                        onClick={() => {
-                          setDraftFacts(prev => prev + (prev.trim() ? "\n\n" : "") + scannedText);
-                          setView('drafting');
-                          setEnlargedElement('facts');
-                        }} 
-                        className="w-full py-4 bg-emerald-600/20 border border-emerald-600/30 text-emerald-500 rounded-2xl font-bold flex items-center justify-center gap-3 hover:bg-emerald-600/30 transition-all"
-                      >
-                        <Plus size={20} /> Send to Drafting Facts
-                      </button>
                     </div>
                   )}
                 </div>
+              </div>
 
-                {/* Main Area: Document Text Preview */}
-                <div className="flex-1 bg-slate-900/50 border border-white/5 rounded-3xl p-8 flex flex-col overflow-hidden relative">
-                  <div className="flex justify-between items-center mb-6">
-                    <div className="text-[10px] font-black uppercase tracking-widest text-indigo-500">Document Preview</div>
-                    <div className="flex items-center gap-4">
-                      {converterStatus === 'done' && (
-                        <div className="flex items-center gap-2 text-emerald-500">
-                          <CheckCircle size={14} />
-                          <span className="text-[10px] font-black uppercase tracking-widest">Ready for Export</span>
-                        </div>
-                      )}
-                      <button 
-                        onClick={() => setIsPreviewEnlarged(true)}
-                        className="p-2 bg-white/5 border border-white/10 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition-all"
-                        title="Enlarge Preview"
-                      >
-                        <Maximize2 size={16} />
-                      </button>
-                    </div>
-                  </div>
-                  <div className="flex-1 bg-black/40 rounded-3xl p-8 overflow-y-auto font-mono text-sm text-slate-400 leading-relaxed whitespace-pre-wrap border border-white/5 relative">
-                    {converterStatus === 'processing' && (
-                      <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-md flex flex-col items-center justify-center z-20">
-                        <button 
-                          onClick={() => setConverterStatus('idle')}
-                          className="absolute top-4 right-4 p-2 bg-white/10 hover:bg-white/20 rounded-full text-white"
-                        >
-                          <X size={20} />
-                        </button>
-                        <div className="flex flex-col items-center gap-4">
-                          <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-                          <div className="text-[10px] font-black tracking-[0.3em] uppercase text-indigo-400 animate-pulse text-center max-w-[200px]">Nexus AI is analyzing the document...</div>
-                          <div className="flex gap-2">
-                            <button 
-                              onClick={() => setConverterStatus('idle')}
-                              className="mt-4 px-4 py-2 bg-indigo-500/10 border border-indigo-500/30 rounded-lg text-[10px] font-black text-indigo-400 uppercase tracking-widest hover:bg-indigo-500/20 flex items-center gap-2"
-                            >
-                              <X size={12} /> Stop Extraction
-                            </button>
-                            <button 
-                              onClick={() => {
-                                setConverterStatus('idle');
-                                setConverterImage(null);
-                                setConverterText('');
-                              }}
-                              className="mt-4 px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-[10px] font-black text-slate-400 uppercase tracking-widest hover:bg-white/10 flex items-center gap-2"
-                            >
-                              <RotateCcw size={12} /> Reset
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    {converterText || (converterStatus === 'processing' ? "Nexus AI is analyzing the document structure and content..." : "Capture or upload a document to begin the conversion process.")}
-                  </div>
-                </div>
-
-                {/* Enlarge Modal Overlay */}
+              {/* Enlarge Modal Overlay */}
                 <AnimatePresence>
                   {isPreviewEnlarged && (
                     <motion.div 
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       exit={{ opacity: 0 }}
-                      className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-xl p-12 flex flex-col"
+                      className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-2xl p-12 flex flex-col"
                     >
                       <div className="flex justify-between items-center mb-8">
                         <div>
-                          <div className="text-[10px] font-black uppercase tracking-widest text-indigo-500 mb-1">Nexus AI Document Preview</div>
-                          <h2 className="text-3xl font-black italic">Full View<span className="text-slate-500">Mode</span></h2>
+                          <div className="text-[10px] font-black uppercase tracking-widest text-indigo-500 mb-1">Nexus AI Document Intelligence</div>
+                          <h2 className="text-3xl font-black italic">Immersive<span className="text-slate-500">Analysis</span></h2>
                         </div>
                         <button 
                           onClick={() => setIsPreviewEnlarged(false)}
-                          className="w-12 h-12 bg-white/5 border border-white/10 rounded-2xl flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10 transition-all"
+                          className="w-14 h-14 bg-white/5 border border-white/10 rounded-2xl flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10 transition-all group"
                         >
-                          <Minimize2 size={24} />
+                          <Minimize2 size={24} className="group-hover:scale-110 transition-all" />
                         </button>
                       </div>
-                      <div className="flex-1 bg-slate-900/50 border border-white/5 rounded-[40px] p-12 overflow-y-auto font-mono text-lg text-slate-300 leading-loose whitespace-pre-wrap">
-                        {converterText}
+                      <div className="flex-1 bg-black/50 rounded-[40px] border border-white/5 p-16 overflow-y-auto custom-scrollbar shadow-2xl">
+                        <div className="max-w-4xl mx-auto">
+                          <p className="text-xl font-mono text-slate-300 leading-loose whitespace-pre-wrap">
+                            {converterText || "No extraction data available for immersive view."}
+                          </p>
+                        </div>
                       </div>
                     </motion.div>
                   )}
                 </AnimatePresence>
-
-                {/* Right Sidebar: AI Translation & Arrangements */}
-                <div className="w-[340px] flex flex-col gap-6 flex-shrink-0 overflow-y-auto pr-2 custom-scrollbar">
-                  {converterStatus === 'done' && (
-                    <div className="bg-slate-900/50 border border-white/5 rounded-3xl p-6 flex flex-col gap-4">
-                      <div className="flex justify-between items-center">
-                        <div className="text-[10px] font-black uppercase tracking-widest text-indigo-500">AI Translation</div>
-                        {isTranslating && <div className="text-[10px] font-black uppercase tracking-widest text-amber-500 animate-pulse">Translating...</div>}
-                      </div>
-                      <div className="flex flex-col gap-3">
-                        <input 
-                          value={targetLanguage}
-                          onChange={(e) => setTargetLanguage(e.target.value)}
-                          placeholder="Target language..."
-                          className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-slate-200 outline-none focus:border-indigo-500/50 transition-all"
-                        />
-                        <button 
-                          onClick={handleTranslate}
-                          disabled={isTranslating || !targetLanguage}
-                          className="w-full py-3 bg-indigo-600 rounded-xl font-bold text-sm disabled:opacity-50 hover:bg-indigo-500 transition-all flex items-center justify-center gap-2"
-                        >
-                          {isTranslating ? <RotateCcw size={14} className="animate-spin" /> : <Globe size={14} />}
-                          Translate Document
-                        </button>
-                      </div>
-                      {translatedText && (
-                        <div className="mt-2 p-4 bg-black/40 rounded-xl border border-white/5 max-h-[300px] overflow-y-auto text-xs text-slate-300 whitespace-pre-wrap leading-relaxed font-mono">
-                          {translatedText}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  <div className="bg-slate-900/50 border border-white/5 rounded-3xl p-6">
-                    <div className="text-[10px] font-black text-indigo-500 uppercase tracking-widest mb-6">System Arrangements</div>
-                    <div className="flex flex-col gap-3">
-                      {CONVERTER_STEPS.map(step => (
-                        <button 
-                          key={step.id} 
-                          onClick={() => {
-                            if (step.id === 1) {
-                              if (scanPhase !== 'live') startScan();
-                              else captureForConverter();
-                            } else if (step.id === 2) {
-                              fileInputRef.current?.click();
-                            } else if (step.id === 3) {
-                              if (converterImage) processConversion();
-                            } else if (step.id === 4) {
-                              if (converterStatus === 'done') handleTranslate();
-                            } else if (step.id === 5) {
-                              if (converterStatus === 'done') exportToPDF();
-                            } else if (step.id === 6) {
-                              if (converterStatus === 'done') exportToWord();
-                            }
-                          }}
-                          disabled={
-                            (step.id === 3 && (!converterImage || converterStatus === 'processing')) ||
-                            (step.id >= 4 && converterStatus !== 'done') ||
-                            (step.id === 4 && isTranslating)
-                          }
-                          className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 flex items-center gap-4 group hover:border-white/10 transition-all text-left disabled:opacity-30 disabled:cursor-not-allowed"
-                        >
-                          <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: `${step.color}15`, color: step.color }}>
-                            {step.icon}
-                          </div>
-                          <div>
-                            <div className="text-[11px] font-black text-slate-200 mb-0.5">{step.title}</div>
-                            <div className="text-[9px] text-slate-500 font-medium uppercase tracking-tighter">{step.desc}</div>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
               </motion.div>
             )}
             {view === 'instructions' && (
