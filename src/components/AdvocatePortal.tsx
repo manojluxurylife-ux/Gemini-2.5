@@ -1683,7 +1683,7 @@ ${response.text}`;
                   </div>
                   {/* Right Column: Results & Export */}
                   <div className="flex-1 bg-slate-900/50 border border-white/5 rounded-3xl p-6 flex flex-col min-h-0 overflow-hidden">
-                    <div className="flex justify-between items-center mb-6">
+                    <div className="flex justify-between items-center mb-6 flex-shrink-0">
                       <div className="flex items-center gap-3">
                         <div className="w-1.5 h-6 bg-indigo-500 rounded-full" />
                         <div className="text-[10px] font-black uppercase tracking-widest text-indigo-500">Output Manifest</div>
@@ -1707,31 +1707,42 @@ ${response.text}`;
                       </div>
                     </div>
 
-                    <div className="flex-1 bg-black/40 rounded-2xl p-6 overflow-y-auto custom-scrollbar relative border border-white/5 mb-6">
-                      <div className="text-sm text-slate-300 font-mono leading-[2] whitespace-pre-wrap">
-                        {converterText || (
-                          <div className="h-full flex flex-col items-center justify-center text-slate-600 gap-4">
-                            <div className="w-16 h-16 bg-white/5 rounded-full flex items-center justify-center opacity-50">
-                              <FileText size={32} />
+                    <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 flex flex-col gap-6">
+                      <div className="bg-black/40 rounded-2xl p-6 relative border border-white/5 min-h-[220px]">
+                        <div className="text-sm text-slate-300 font-mono leading-[2] whitespace-pre-wrap">
+                          {converterText || (
+                            <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-600 gap-4">
+                              <div className="w-16 h-16 bg-white/5 rounded-full flex items-center justify-center opacity-50">
+                                <FileText size={32} />
+                              </div>
+                              <div className="text-xs font-medium italic">Output is currently empty...</div>
                             </div>
-                            <div className="text-xs font-medium italic">Output is currently empty...</div>
-                          </div>
-                        )}
+                          )}
+                        </div>
                       </div>
-                    </div>
 
-                    {converterStatus === 'done' && (
                       <div className="flex flex-col gap-6">
-                        <div className="p-5 bg-indigo-500/5 border border-indigo-500/20 rounded-2xl">
-                          <div className="flex items-center gap-2 mb-4 text-indigo-400">
-                            <Globe size={14} />
-                            <span className="text-[10px] font-black uppercase tracking-widest">Multilingual AI Translation</span>
+                        <div className={`p-5 rounded-2xl shadow-inner transition-all border ${
+                          !converterText ? 'bg-slate-900/40 border-white/5 opacity-50 select-none' : 'bg-indigo-500/5 border-indigo-500/20'
+                        }`}>
+                          <div className="flex items-center justify-between mb-4">
+                            <div className={`flex items-center gap-2 ${!converterText ? 'text-slate-500' : 'text-indigo-400'}`}>
+                              <Globe size={14} />
+                              <span className="text-[10px] font-black uppercase tracking-widest">Multilingual AI Translation</span>
+                            </div>
+                            {isTranslating && (
+                              <div className="flex items-center gap-2 text-amber-500 animate-pulse">
+                                <RefreshCw size={12} className="animate-spin" />
+                                <span className="text-[9px] font-black uppercase tracking-widest">Processing...</span>
+                              </div>
+                            )}
                           </div>
                           <div className="flex gap-2 mb-4">
                             <select 
                               value={targetLanguage}
                               onChange={(e) => setTargetLanguage(e.target.value)}
-                              className="flex-1 bg-black/50 border border-white/10 rounded-xl px-4 py-2 text-xs text-slate-300 focus:border-indigo-500 transition-all outline-none"
+                              disabled={!converterText || isTranslating}
+                              className="flex-1 bg-black/50 border border-white/10 rounded-xl px-4 py-2 text-xs text-slate-300 focus:border-indigo-500 transition-all outline-none disabled:cursor-not-allowed"
                             >
                               <option value="">Select Language...</option>
                               <option value="Malayalam">Malayalam (മലയാളം)</option>
@@ -1740,24 +1751,24 @@ ${response.text}`;
                               <option value="Telugu">Telugu (తెలుగు)</option>
                               <option value="Kannada">Kannada (കന്നഡ)</option>
                               <option value="Bengali">Bengali (বাংলা)</option>
-                              <option value="Marathi">Marathi (मराठी)</option>
+                              <option value="Marathi">Marathi (മരാഠി)</option>
                               <option value="English">English (British/Indian)</option>
                             </select>
                             <button 
                               onClick={handleTranslate}
-                              disabled={!targetLanguage || isTranslating}
+                              disabled={!targetLanguage || isTranslating || !converterText}
                               className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
-                                !targetLanguage || isTranslating 
+                                !targetLanguage || isTranslating || !converterText
                                   ? 'bg-slate-800 text-slate-500 cursor-not-allowed' 
-                                  : 'bg-indigo-600 text-white hover:bg-indigo-500'
+                                  : 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-lg shadow-indigo-500/20'
                               }`}
                             >
                               {isTranslating ? 'Translating...' : 'Translate'}
                             </button>
                           </div>
 
-                          {translatedText && (
-                            <div className="bg-black/50 border border-white/10 rounded-xl p-4 relative group">
+                          {translatedText ? (
+                            <div className="bg-black/50 border border-white/10 rounded-xl p-4 relative group animate-in fade-in slide-in-from-top-2">
                               <div className="text-[9px] font-black text-indigo-400 uppercase tracking-widest mb-2 border-b border-indigo-500/10 pb-1">Translation Result ({targetLanguage})</div>
                               <div className="text-xs text-slate-300 leading-relaxed max-h-[150px] overflow-y-auto custom-scrollbar italic whitespace-pre-wrap">
                                 {translatedText}
@@ -1768,33 +1779,52 @@ ${response.text}`;
                                 </button>
                               </div>
                             </div>
-                          )}
+                          ) : !converterText ? (
+                            <div className="text-[9px] text-slate-600 italic text-center py-4 border border-dashed border-white/5 rounded-xl">
+                              Extract text to enable translation features
+                            </div>
+                          ) : null}
                         </div>
 
-                        <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-                        <button onClick={exportToPDF} className="py-3 bg-red-600/10 border border-red-600/30 text-red-500 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-red-600/20 transition-all">
-                          <FileText size={16} /> PDF
-                        </button>
-                        <button onClick={exportToWord} className="py-3 bg-blue-600/10 border border-blue-600/30 text-blue-500 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-blue-600/20 transition-all">
-                          <File size={16} /> Word
-                        </button>
-                        <button 
-                          onClick={() => {
-                            setDraftFacts(prev => prev + (prev.trim() ? "\n\n" : "") + converterText);
-                            setView('drafting');
-                            setEnlargedElement('facts');
-                          }} 
-                          className="py-3 bg-amber-500/10 border border-amber-500/30 text-amber-500 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-amber-500/20 transition-all col-span-2 lg:col-span-1"
-                        >
-                          <Plus size={16} /> Draft
-                        </button>
+                        <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 mb-6 flex-shrink-0">
+                          <button 
+                            onClick={exportToPDF} 
+                            disabled={!converterText}
+                            className={`py-3 border rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all ${
+                              !converterText ? 'bg-slate-800 border-white/5 text-slate-600 cursor-not-allowed' : 'bg-red-600/10 border-red-600/30 text-red-500 hover:bg-red-600/20'
+                            }`}
+                          >
+                            <FileText size={16} /> PDF
+                          </button>
+                          <button 
+                            onClick={exportToWord} 
+                            disabled={!converterText}
+                            className={`py-3 border rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all ${
+                              !converterText ? 'bg-slate-800 border-white/5 text-slate-600 cursor-not-allowed' : 'bg-blue-600/10 border-blue-600/30 text-blue-500 hover:bg-blue-600/20'
+                            }`}
+                          >
+                            <File size={16} /> Word
+                          </button>
+                          <button 
+                            onClick={() => {
+                              setDraftFacts(prev => prev + (prev.trim() ? "\n\n" : "") + (translatedText ? `[Translation to ${targetLanguage}]\n${translatedText}` : converterText));
+                              setView('drafting');
+                              setEnlargedElement('facts');
+                            }} 
+                            disabled={!converterText}
+                            className={`py-3 border rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all col-span-2 lg:col-span-1 ${
+                              !converterText ? 'bg-slate-800 border-white/5 text-slate-600 cursor-not-allowed' : 'bg-amber-500/10 border-amber-500/30 text-amber-500 hover:bg-amber-500/20'
+                            }`}
+                          >
+                            <Plus size={16} /> Draft
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  )}
+                  </div>
                 </div>
-              </div>
 
-              {/* Enlarge Modal Overlay */}
+                {/* Enlarge Modal Overlay */}
                 <AnimatePresence>
                   {isPreviewEnlarged && (
                     <motion.div 

@@ -42,9 +42,9 @@ export class HybridAIEngine {
   public getStatus() {
     return {
       builtIn: !!this.ai,
-      voiceModel: 'Gemini 3.1 Flash (Direct)',
-      draftModel: 'Gemini 3.1 Flash (Pro-Logic)',
-      searchModel: 'Gemini 3.1 Flash (Grounding)',
+      voiceModel: 'Gemini 3 Flash (Direct)',
+      draftModel: 'Gemini 3 Flash (Pro-Logic)',
+      searchModel: 'Gemini 3 Flash (Grounding)',
       isLocalReady: true,
       loadProgress: 100
     };
@@ -61,8 +61,8 @@ export class HybridAIEngine {
     }
 
     try {
-      // Use Gemini 3.1 Flash Preview as requested
-      const modelName = 'gemini-3.1-flash-preview';
+      // Direct use of Gemini 3 Flash
+      const modelName = 'gemini-3-flash-preview';
       const contents: any[] = history.map(m => ({
         role: m.role === 'assistant' ? 'model' : 'user',
         parts: [{ text: m.content }]
@@ -127,10 +127,10 @@ In Malayalam: "ഞാൻ നെക്സസ് ജസ്റ്റിസ് ആ�
 
       if (effectiveTask === 'search') {
         const text = await this.callGeminiSearch(prompt, history);
-        return { text, model: "Gemini 3.1 Flash (Search)" };
+        return { text, model: "Gemini 3 Flash (Search)" };
       }
 
-      const modelName = 'gemini-3.1-flash-preview';
+      const modelName = 'gemini-3-flash-preview';
       const contents: any[] = history.map(m => ({
         role: m.role === 'assistant' ? 'model' : 'user',
         parts: [{ text: m.content }]
@@ -165,7 +165,7 @@ If responding in Malayalam, ensure native-level accuracy. Maintain conversation 
         }
       });
 
-      return { text: response.text || "I'm sorry, I couldn't generate a response.", model: "Gemini 3.1 Flash" };
+      return { text: response.text || "I'm sorry, I couldn't generate a response.", model: "Gemini 3 Flash" };
     } catch (error: any) {
       console.error("AI Engine Error:", error);
       let rawMsg = typeof error === 'string' ? error : (error?.message || String(error));
