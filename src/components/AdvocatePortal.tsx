@@ -180,6 +180,15 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
   const aiEngine = HybridAIEngine.getInstance();
   const localDB = LocalDB.getInstance();
   const geminiLive = useGeminiLive();
+  const transcriptEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (geminiLive.isConnected && transcriptEndRef.current) {
+      setTimeout(() => {
+        transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      }, 100);
+    }
+  }, [geminiLive.messages, geminiLive.isConnected]);
 
   const [clients, setClients] = useState<any[]>([]);
   const [chatHistory, setChatHistory] = useState<AIMessage[]>([]);
@@ -222,12 +231,88 @@ export default function AdvocatePortal({ onBack }: { onBack: () => void }) {
   ]);
 
   const [draftFacts, setDraftFacts] = useState('');
+  const activeSpeechIdRef = useRef<any>(null);
+  const speechBaseFactsRef = useRef<string>('');
+
+  // Automatically type spoken client/advocate turn transcriptions into draftFacts in real-time
+  useEffect(() => {
+    if (!geminiLive.isConnected) {
+      activeSpeechIdRef.current = null;
+      speechBaseFactsRef.current = '';
+      return;
+    }
+
+    const messages = geminiLive.messages;
+    if (messages.length === 0) {
+      activeSpeechIdRef.current = null;
+      speechBaseFactsRef.current = draftFacts;
+      return;
+    }
+
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg.role === 'user') {
+      const turnId = lastMsg.timestamp;
+      
+      if (activeSpeechIdRef.current !== turnId) {
+        // Brand new user spoken segment, capture current draftFacts as base
+        speechBaseFactsRef.current = draftFacts;
+        activeSpeechIdRef.current = turnId;
+      }
+
+      const base = speechBaseFactsRef.current.trim();
+      const speech = lastMsg.text.trim();
+      if (speech) {
+        const appended = base ? `${base}\n${speech}` : speech;
+        setDraftFacts(appended);
+      }
+    } else {
+      // User is not speaking (model reply or standby), reset turn tracking
+      activeSpeechIdRef.current = null;
+      speechBaseFactsRef.current = draftFacts;
+    }
+  }, [geminiLive.messages, geminiLive.isConnected]);
+
   const [draftModel, setDraftModel] = useState('');
   const [draftSuggestions, setDraftSuggestions] = useState('');
   const [isDrafting, setIsDrafting] = useState(false);
   const [enlargedElement, setEnlargedElement] = useState<'facts' | 'model' | 'pad' | null>(null);
   const enlargedElementRef = useRef(enlargedElement);
   useEffect(() => { enlargedElementRef.current = enlargedElement; }, [enlargedElement]);
+
+  // Synchronize muting Gemini Live voice playout during drafting / fact entry
+  useEffect(() => {
+    if (view === 'drafting' || enlargedElement === 'facts') {
+      geminiLive.setMuteAudio(true);
+    } else {
+      geminiLive.setMuteAudio(false);
+    }
+  }, [view, enlargedElement, geminiLive.setMuteAudio]);
+
+  const toggleLiveVoice = () => {
+    if (geminiLive.isConnected) {
+      geminiLive.disconnect();
+    } else {
+      if (view === 'drafting' || enlargedElement === 'facts') {
+        if (typeof window !== 'undefined' && window.speechSynthesis) {
+          window.speechSynthesis.cancel();
+          const utterance = new SpeechSynthesisUtterance("Please enter the fact of the case, I will transcribe it.");
+          const voices = window.speechSynthesis.getVoices();
+          const voice = voices.find(v => v.lang.startsWith('en'));
+          if (voice) utterance.voice = voice;
+          
+          utterance.onend = () => {
+            // Only connect if the user hasn't toggled it off while speaking
+            geminiLive.connect();
+          };
+          window.speechSynthesis.speak(utterance);
+        } else {
+          geminiLive.connect();
+        }
+      } else {
+        geminiLive.connect();
+      }
+    }
+  };
 
   // Doc Converter Logic
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -770,7 +855,7 @@ ${response.text}`;
                         
                         <div className="flex gap-3 mb-4">
                           <button 
-                            onClick={() => geminiLive.isConnected ? geminiLive.disconnect() : geminiLive.connect()} 
+                            onClick={toggleLiveVoice} 
                             disabled={!!geminiLive.error && !geminiLive.isConnected}
                             className={`flex-[2] py-4 rounded-xl font-black text-sm transition-all flex items-center justify-center gap-2 ${
                               geminiLive.isConnected ? 'bg-red-500 text-white shadow-lg' : 
@@ -792,6 +877,69 @@ ${response.text}`;
                             >
                               <Camera size={18} />
                             </button>
+                          )}
+                        </div>
+
+                        {/* Whisper-mini STT Integration Panel */}
+                        <div className="mt-4 pt-4 border-t border-white/5 space-y-3">
+                          <div className="flex justify-between items-center text-[10px] font-black tracking-widest text-slate-400">
+                            <span>WISPERMINI REALTIME TRANSCRIPTION (OFFLINE)</span>
+                            <button
+                              onClick={() => geminiLive.setUseWhisperSTT(!geminiLive.useWhisperSTT)}
+                              className={`px-2 py-1 rounded-lg text-[8px] font-black tracking-wider transition-all ${
+                                geminiLive.useWhisperSTT 
+                                  ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30' 
+                                  : 'bg-white/5 text-slate-500 border border-white/5'
+                              }`}
+                              title={geminiLive.useWhisperSTT ? 'Switch to cloud STT' : 'Switch to local STT pipeline'}
+                            >
+                              {geminiLive.useWhisperSTT ? 'WISPERMINI ACTIVE' : 'CLOUD NATIVE'}
+                            </button>
+                          </div>
+
+                          {geminiLive.useWhisperSTT && (
+                            <div className="bg-white/5 border border-white/5 rounded-2xl p-4 flex flex-col gap-2.5">
+                              <div className="flex items-center justify-between text-[10px] tracking-wide">
+                                <div className="flex items-center gap-2">
+                                  <div className={`w-2 h-2 rounded-full ${
+                                    geminiLive.isWhisperLoading ? 'bg-amber-500 animate-pulse' :
+                                    geminiLive.isWhisperReady ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.3)]' : 'bg-slate-600'
+                                  }`} />
+                                  <span className="font-bold text-slate-300">
+                                    {geminiLive.isWhisperLoading ? 'Downloading Local STT Engine...' :
+                                     geminiLive.isWhisperReady ? 'WisperMini Ready (Whisper Tiny)' : 'Whisper STT Model Standby'}
+                                  </span>
+                                </div>
+                                {geminiLive.isWhisperLoading && (
+                                  <span className="font-mono text-amber-500 text-[10px] font-bold">{geminiLive.whisperProgress}%</span>
+                                )}
+                              </div>
+
+                              {geminiLive.isWhisperLoading && (
+                                <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden">
+                                  <div 
+                                    className="h-full bg-amber-500 transition-all duration-300"
+                                    style={{ width: `${geminiLive.whisperProgress}%` }}
+                                  />
+                                </div>
+                              )}
+
+                              {!geminiLive.isWhisperReady && !geminiLive.isWhisperLoading && (
+                                <button
+                                  onClick={() => geminiLive.loadWhisperSTT()}
+                                  className="w-full py-2.5 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/20 text-indigo-300 hover:text-white rounded-xl text-[9px] font-black uppercase tracking-widest transition-all"
+                                >
+                                  Warm-Up WisperMini Pipeline (Xenova Model)
+                                </button>
+                              )}
+
+                              {geminiLive.isWhisperTranscribing && (
+                                <div className="text-[10px] text-amber-400 font-bold italic animate-pulse flex items-center gap-2 justify-center py-1 bg-amber-500/5 rounded-xl border border-amber-500/10">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+                                  WisperMini is transcribing speech locally...
+                                </div>
+                              )}
+                            </div>
                           )}
                         </div>
 
@@ -2027,8 +2175,47 @@ ${response.text}`;
                     isThinking={false}
                     isConnected={geminiLive.isConnected} 
                   />
-                  <div className="text-sm font-medium text-white italic text-center w-full min-h-[1.25rem]">
-                    {geminiLive.messages.length > 0 ? geminiLive.messages[geminiLive.messages.length - 1].text : "Live Audio Optimized"}
+                  
+                  {/* Transcript panel of actual vocal back-and-forth */}
+                  <div className="w-full max-h-[160px] overflow-y-auto custom-scrollbar flex flex-col gap-2 p-3 bg-white/5 rounded-2xl border border-white/5 text-left my-1">
+                    {geminiLive.messages.length === 0 ? (
+                      <div className="text-slate-500 text-xs text-center py-4 italic">
+                        Start speaking to see transcript...
+                      </div>
+                    ) : (
+                      geminiLive.messages.map((msg, idx) => (
+                        <div 
+                          key={idx} 
+                          className={`flex flex-col gap-0.5 max-w-[85%] ${
+                            msg.role === 'user' ? 'self-end items-end' : 'self-start items-start'
+                          }`}
+                        >
+                          <span className="text-[8px] font-black uppercase tracking-widest text-slate-500">
+                            {msg.role === 'user' ? 'You' : 'Nexus'}
+                          </span>
+                          <div 
+                            className={`px-3 py-1.5 rounded-2xl text-xs leading-relaxed break-words ${
+                              msg.role === 'user' 
+                                ? 'bg-indigo-600 text-white rounded-tr-none' 
+                                : 'bg-slate-800 text-slate-200 border border-white/5 rounded-tl-none'
+                            }`}
+                          >
+                            {msg.text}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                    <div ref={transcriptEndRef} />
+                  </div>
+
+                  <div className="text-[10px] font-medium text-slate-400 italic text-center w-full">
+                    {geminiLive.isWhisperTranscribing ? (
+                      <span className="text-amber-400 font-bold animate-pulse">WisperMini transcribing speech...</span>
+                    ) : geminiLive.messages.length > 0 ? (
+                      geminiLive.isModelSpeaking ? "Nexus is speaking..." : "Listening..."
+                    ) : (
+                      "Live audio transcriber ready"
+                    )}
                   </div>
                 </div>
                 {voiceAiReply && (
@@ -2061,7 +2248,7 @@ ${response.text}`;
             <Camera size={20} />
           </button>
           <button 
-            onClick={() => geminiLive.isConnected ? geminiLive.disconnect() : geminiLive.connect()}
+            onClick={toggleLiveVoice}
             className={`w-12 h-12 rounded-full flex items-center justify-center text-white transition-all relative ${
               geminiLive.isConnected ? 'bg-red-500 shadow-[0_0_30px_rgba(239,68,68,0.5)]' : 'bg-indigo-500 shadow-[0_0_20px_rgba(99,102,241,0.4)]'
             }`}
@@ -2171,7 +2358,7 @@ ${response.text}`;
                     <div className="flex items-center gap-6">
                       <div className="flex flex-col items-center gap-2">
                         <button 
-                          onClick={() => geminiLive.isConnected ? geminiLive.disconnect() : geminiLive.connect()}
+                          onClick={toggleLiveVoice}
                           className={`w-16 h-16 rounded-2xl flex flex-col items-center justify-center text-white transition-all relative ${
                             geminiLive.isConnected ? 'bg-red-500 shadow-[0_0_30px_rgba(239,68,68,0.5)]' : 'bg-indigo-500 shadow-[0_0_20px_rgba(99,102,241,0.4)]'
                           }`}
@@ -2202,10 +2389,20 @@ ${response.text}`;
                       </div>
 
                       {geminiLive.isConnected ? (
-                        <div className="flex flex-col ml-4">
-                          <div className="text-[10px] font-black text-indigo-400 tracking-widest uppercase">STORYTELLING ACTIVE</div>
-                          <div className="text-sm text-emerald-500 font-bold animate-pulse max-w-md truncate">
-                            {geminiLive.messages.length > 0 ? geminiLive.messages[geminiLive.messages.length - 1].text : "Narrate your case facts now..."}
+                        <div className="flex flex-col ml-4 flex-1">
+                          <div className="text-[10px] font-black text-indigo-400 tracking-widest uppercase mb-1">STORYTELLING ACTIVE (TRANSCRIPT)</div>
+                          <div className="max-h-[80px] overflow-y-auto custom-scrollbar flex flex-col gap-1.5 p-2.5 bg-white/5 rounded-xl border border-white/5 max-w-sm">
+                            {geminiLive.messages.length === 0 ? (
+                              <span className="text-xs text-slate-500 italic">Narrate case facts now...</span>
+                            ) : (
+                              geminiLive.messages.map((m, idx) => (
+                                <div key={idx} className="text-xs leading-relaxed">
+                                  <span className="font-bold text-slate-400">{m.role === 'user' ? 'You: ' : 'Nexus: '}</span>
+                                  <span className="text-slate-200">{m.text}</span>
+                                </div>
+                              ))
+                            )}
+                            <div ref={transcriptEndRef} />
                           </div>
                         </div>
                       ) : (

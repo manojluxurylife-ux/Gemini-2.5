@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
 import { float32ToInt16PCM, int16PCMToFloat32, SAMPLE_RATE, OUTPUT_SAMPLE_RATE, createAudioContext } from '../lib/audio-utils';
+import { MalayalamEngine } from '../lib/malayalam-engine';
 
 export interface Message {
   role: 'user' | 'model';
@@ -17,6 +18,49 @@ export function useGeminiLive() {
   const [isModelSpeaking, setIsModelSpeaking] = useState(false);
   const [volume, setVolume] = useState(0);
 
+  // Mute audio state and reference to prevent local playout
+  const [muteAudio, setMuteAudio] = useState(false);
+  const muteAudioRef = useRef(false);
+
+  // Whisper STT states and references
+  const [useWhisperSTT, setUseWhisperSTT] = useState(true); // Enabled by default as per request
+  const [whisperProgress, setWhisperProgress] = useState(0);
+  const [isWhisperLoading, setIsWhisperLoading] = useState(false);
+  const [isWhisperReady, setIsWhisperReady] = useState(false);
+  const [isWhisperTranscribing, setIsWhisperTranscribing] = useState(false);
+
+  const useWhisperSTTRef = useRef(true);
+  const isModelSpeakingRef = useRef(false);
+  const userSpeechBufferRef = useRef<Float32Array[]>([]);
+  const silenceStartRef = useRef<number | null>(null);
+  const isUserSpeakingRef = useRef<boolean>(false);
+  const isTranscribingRef = useRef<boolean>(false);
+
+  // Sync state variables to refs to ensure closure safety in audio thread callbacks
+  useEffect(() => {
+    useWhisperSTTRef.current = useWhisperSTT;
+  }, [useWhisperSTT]);
+
+  useEffect(() => {
+    isModelSpeakingRef.current = isModelSpeaking;
+  }, [isModelSpeaking]);
+
+  useEffect(() => {
+    muteAudioRef.current = muteAudio;
+  }, [muteAudio]);
+
+  // Periodic status checking of Malayalam/Whisper Engine readiness
+  useEffect(() => {
+    const checkStatus = () => {
+      const engine = MalayalamEngine.getInstance();
+      const status = engine.getStatus();
+      setIsWhisperReady(status.sttReady);
+    };
+    checkStatus();
+    const interval = setInterval(checkStatus, 1500);
+    return () => clearInterval(interval);
+  }, []);
+
   const sessionRef = useRef<any>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -25,7 +69,81 @@ export function useGeminiLive() {
   const isPlayingRef = useRef(false);
   const nextStartTimeRef = useRef(0);
 
+  const loadWhisperSTT = useCallback(async (force = false) => {
+    const engine = MalayalamEngine.getInstance();
+    if (engine.getStatus().sttReady && !force) {
+      setIsWhisperReady(true);
+      return;
+    }
+
+    setIsWhisperLoading(true);
+    try {
+      await engine.loadSTT((progress) => {
+        setWhisperProgress(progress);
+      });
+      setIsWhisperReady(true);
+    } catch (err) {
+      console.error("Failed to load local Whisper STT model:", err);
+    } finally {
+      setIsWhisperLoading(false);
+    }
+  }, []);
+
+  const transcribeCollectedAudio = useCallback(async () => {
+    if (isTranscribingRef.current || userSpeechBufferRef.current.length === 0) return;
+
+    isTranscribingRef.current = true;
+    setIsWhisperTranscribing(true);
+
+    try {
+      const chunks = userSpeechBufferRef.current;
+      userSpeechBufferRef.current = []; // Clear immediately to avoid multiple transcriptions
+
+      const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
+      if (totalLength < 4000) { // Under 0.25 sec of audio, discard
+        return;
+      }
+
+      const audioToTranscribe = new Float32Array(totalLength);
+      let offset = 0;
+      for (const chunk of chunks) {
+        audioToTranscribe.set(chunk, offset);
+        offset += chunk.length;
+      }
+
+      const engine = MalayalamEngine.getInstance();
+      if (!engine.getStatus().sttReady) {
+        await engine.loadSTT();
+      }
+
+      console.log(`[Whisper STT] Transcribing user audio segment of ${audioToTranscribe.length} samples locally...`);
+      const text = await engine.transcribe(audioToTranscribe, 'auto');
+
+      if (text && text.trim()) {
+        const cleanedText = text.trim();
+        console.log("[Whisper STT] Result text:", cleanedText);
+        setMessages(prev => {
+          const lastMsg = prev[prev.length - 1];
+          // Prevent duplicates if native STT also returns identical text
+          if (lastMsg && lastMsg.role === 'user' && (lastMsg.text === cleanedText || lastMsg.text.includes(cleanedText))) {
+            return prev;
+          }
+          return [...prev, { role: 'user', text: cleanedText, timestamp: Date.now() }];
+        });
+      }
+    } catch (e) {
+      console.error("[Whisper STT] Local Whisper transcription failed:", e);
+    } finally {
+      isTranscribingRef.current = false;
+      setIsWhisperTranscribing(false);
+    }
+  }, []);
+
   const playQueuedAudio = useCallback(async () => {
+    if (muteAudioRef.current) {
+      audioQueueRef.current = [];
+      return;
+    }
     if (!audioContextRef.current || audioQueueRef.current.length === 0) return;
 
     // Ensure context is running
@@ -79,6 +197,13 @@ export function useGeminiLive() {
     }
     setIsConnected(false);
     setVolume(0);
+
+    // Reset Whisper buffers and state flags
+    userSpeechBufferRef.current = [];
+    isUserSpeakingRef.current = false;
+    silenceStartRef.current = null;
+    isTranscribingRef.current = false;
+    setIsWhisperTranscribing(false);
   }, []);
 
   useEffect(() => {
@@ -91,6 +216,19 @@ export function useGeminiLive() {
     if (isConnected || isConnecting) return;
     setIsConnecting(true);
     setError(null);
+    setMessages([]); // Start fresh with empty messages on connection
+
+    // Pre-emptively load local Whisper model if enabled and not ready
+    if (useWhisperSTTRef.current) {
+      const engine = MalayalamEngine.getInstance();
+      if (!engine.getStatus().sttReady) {
+        try {
+          await loadWhisperSTT();
+        } catch (e) {
+          console.warn("[Whisper STT] Lazy-load postponed or failed:", e);
+        }
+      }
+    }
 
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
@@ -130,10 +268,41 @@ You handle interruptions naturally. Keep your responses brief and helpful.`,
             console.log("Gemini Live connection established");
           },
           onmessage: async (message: LiveServerMessage) => {
+            // 1. Capture User Turn Transcription
+            if ((message.serverContent as any)?.userTurn) {
+              const parts = (message.serverContent as any).userTurn.parts;
+              for (const part of parts) {
+                if (part.text) {
+                  setMessages(prev => {
+                    const lastMsg = prev[prev.length - 1];
+                    if (lastMsg && lastMsg.role === 'user') {
+                      const updated = [...prev];
+                      const existingText = lastMsg.text;
+                      const newSegment = part.text!;
+                      
+                      let mergedText = existingText;
+                      if (!existingText.includes(newSegment)) {
+                        mergedText = existingText + " " + newSegment;
+                      }
+                      
+                      updated[updated.length - 1] = {
+                        ...lastMsg,
+                        text: mergedText.trim().replace(/\s+/g, ' ')
+                      };
+                      return updated;
+                    } else {
+                      return [...prev, { role: 'user', text: part.text!, timestamp: Date.now() }];
+                    }
+                  });
+                }
+              }
+            }
+
+            // 2. Capture Model Turn Audio & Text Transcription
             if (message.serverContent?.modelTurn) {
               const parts = message.serverContent.modelTurn.parts;
               for (const part of parts) {
-                if (part.inlineData?.data) {
+                if (part.inlineData?.data && !muteAudioRef.current) {
                   const audioData = int16PCMToFloat32(part.inlineData.data);
                   audioQueueRef.current.push(audioData);
                   
@@ -145,7 +314,27 @@ You handle interruptions naturally. Keep your responses brief and helpful.`,
                   playQueuedAudio();
                 }
                 if (part.text) {
-                  setMessages(prev => [...prev, { role: 'model', text: part.text!, timestamp: Date.now() }]);
+                  setMessages(prev => {
+                    const lastMsg = prev[prev.length - 1];
+                    if (lastMsg && lastMsg.role === 'model') {
+                      const updated = [...prev];
+                      const existingText = lastMsg.text;
+                      const newSegment = part.text!;
+                      
+                      let mergedText = existingText;
+                      if (!existingText.endsWith(newSegment)) {
+                        mergedText = existingText + newSegment;
+                      }
+                      
+                      updated[updated.length - 1] = {
+                        ...lastMsg,
+                        text: mergedText
+                      };
+                      return updated;
+                    } else {
+                      return [...prev, { role: 'model', text: part.text!, timestamp: Date.now() }];
+                    }
+                  });
                 }
               }
             }
@@ -215,10 +404,14 @@ You handle interruptions naturally. Keep your responses brief and helpful.`,
         for (let i = 0; i < inputData.length; i++) {
           sum += inputData[i] * inputData[i];
         }
-        setVolume(Math.sqrt(sum / inputData.length));
+        const currentVol = Math.sqrt(sum / inputData.length);
+        setVolume(currentVol);
+
+        // Prevent feedback loop / two ladies talking if the local speechSynthesis is actively speaking
+        const isSystemSpeechSpeaking = typeof window !== 'undefined' && window.speechSynthesis && window.speechSynthesis.speaking;
 
         // Send audio to Gemini
-        if (isConnectedRef.current && sessionRef.current) {
+        if (isConnectedRef.current && sessionRef.current && !isSystemSpeechSpeaking) {
           const pcmData = float32ToInt16PCM(inputData);
           sessionRef.current.sendRealtimeInput({
             audio: { 
@@ -226,6 +419,47 @@ You handle interruptions naturally. Keep your responses brief and helpful.`,
               mimeType: `audio/pcm;rate=${audioContextRef.current?.sampleRate || 16000}` 
             }
           });
+        }
+
+        // Whisper STT processing
+        if (useWhisperSTTRef.current) {
+          // If model is speaking or system speech is talking, don't capture audio (prevent feedback loop)
+          if (isModelSpeakingRef.current || isSystemSpeechSpeaking) {
+            userSpeechBufferRef.current = [];
+            isUserSpeakingRef.current = false;
+            silenceStartRef.current = null;
+            return;
+          }
+
+          // Volume threshold for speech detection
+          const voiceThreshold = 0.012; 
+          
+          if (currentVol > voiceThreshold) {
+            // User is actively speaking
+            isUserSpeakingRef.current = true;
+            silenceStartRef.current = null;
+            
+            // Limit buffer size to prevent memory issues (max ~30 seconds)
+            const currentTotalSamples = userSpeechBufferRef.current.reduce((acc, chunk) => acc + chunk.length, 0);
+            if (currentTotalSamples < 480000) {
+              userSpeechBufferRef.current.push(new Float32Array(inputData));
+            }
+          } else {
+            // User is silent or paused
+            if (isUserSpeakingRef.current) {
+              if (silenceStartRef.current === null) {
+                silenceStartRef.current = Date.now();
+              } else if (Date.now() - silenceStartRef.current > 1500) {
+                // Silence has lasted more than 1.5 seconds. User probably finished speaking!
+                transcribeCollectedAudio();
+                isUserSpeakingRef.current = false;
+                silenceStartRef.current = null;
+              } else {
+                // Still accumulating some background samples before confirming silence
+                userSpeechBufferRef.current.push(new Float32Array(inputData));
+              }
+            }
+          }
         }
       };
 
@@ -253,7 +487,7 @@ You handle interruptions naturally. Keep your responses brief and helpful.`,
       setError(msg);
       setIsConnecting(false);
     }
-  }, [isConnected, isConnecting, playQueuedAudio]);
+  }, [isConnected, isConnecting, playQueuedAudio, loadWhisperSTT, transcribeCollectedAudio]);
 
   const sendVideoFrame = useCallback((base64Data: string) => {
     if (isConnectedRef.current && sessionRef.current) {
@@ -276,6 +510,19 @@ You handle interruptions naturally. Keep your responses brief and helpful.`,
     disconnect,
     sendVideoFrame,
     error,
-    resetError: () => setError(null)
+    resetError: () => setError(null),
+    
+    // Mute control
+    muteAudio,
+    setMuteAudio,
+    
+    // Whisper-specific exports
+    useWhisperSTT,
+    setUseWhisperSTT,
+    whisperProgress,
+    isWhisperLoading,
+    isWhisperReady,
+    isWhisperTranscribing,
+    loadWhisperSTT
   };
 }

@@ -105,19 +105,22 @@ export class MalayalamEngine {
   }
 
   /**
-   * Transcribes Malayalam speech from audio
+   * Transcribes speech from audio with optional language parameter
    */
-  public async transcribe(audio: any): Promise<string | null> {
+  public async transcribe(audio: any, language: string = 'malayalam'): Promise<string | null> {
     if (!this.sttPipeline) return null;
 
     try {
-      const output = await this.sttPipeline(audio, {
-        language: 'malayalam',
+      const options: any = {
         task: 'transcribe'
-      });
+      };
+      if (language && language !== 'auto') {
+        options.language = language;
+      }
+      const output = await this.sttPipeline(audio, options);
       return output.text;
     } catch (error) {
-      console.error("Malayalam STT Inference Error:", error);
+      console.error("STT Inference Error:", error);
       return null;
     }
   }
